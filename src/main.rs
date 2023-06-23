@@ -19,7 +19,8 @@ struct Boundaries {
 
 struct FEMesh {
     points: Points2D,
-    elements: Elements
+    elements: Elements,
+    bounds: Boundaries
 }
 
 // FIXME: Boundaries abspeichern!
@@ -61,30 +62,48 @@ fn get_FE_mesh(length: f64, height: f64, length_n: usize, height_n: usize) -> FE
 
     // Linker und rechter Rand 
     for j in 0..=height_n {
-        left[(j)] = j;
+        left[(height_n-j)] = j;
         right[(j)] = j + (length_n+1)*(height_n+1) - (height_n+1);
     }
 
     // Oberer und unterer Rand
     for i in 0..=length_n {
         bottom[(i)] = i*(height_n+1);
-        top[(i)] = i*(height_n+1) + height_n;
+        top[(length_n-i)] = i*(height_n+1) + height_n;
     }
 
     // FIXME: Orientierung ist wichtig! Immer gegen den Uhrzeigersinn
 
+    println!("{}",left);
     println!("{}",bottom);
+    println!("{}",right);
     println!("{}",top);
 
     println!("{}",elem);
 
     return FEMesh {
         points: p,
-        elements: elem
+        elements: elem,
+        bounds: Boundaries { 
+            left, 
+            right, 
+            top, 
+            bottom 
+        }
     };
 }
 
 // Connectivität zu Quad Elementen
+
+// Lineare Shape Functions (Locking)
+fn g1(coord: f64) -> f64 {
+    0.5 - coord/2.0
+}
+
+fn g2(coord: f64) -> f64 {
+    0.5 + coord/2.0
+}
+
 
 // Assemblierung Elemente
 
