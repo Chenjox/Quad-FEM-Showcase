@@ -9,6 +9,7 @@ use nalgebra::{OMatrix, Dyn, Const, OVector};
 type Points2D = OMatrix<f64,Const<2>,Dyn>;
 type Elements = OMatrix<usize,Const<4>,Dyn>;
 type BoundList = OVector<usize,Dyn>;
+type Matrix3x3 = OMatrix<f64,Const<3>,Const<3>>;
 // TODO: Boundaries abspeichern!
 struct Boundaries {
     left: BoundList,
@@ -99,10 +100,36 @@ fn get_FE_mesh(length: f64, height: f64, length_n: usize, height_n: usize) -> FE
 fn g1(coord: f64) -> f64 {
     0.5 - coord/2.0
 }
-
+fn g1_d(_coord: f64) -> f64 {
+    - 0.5
+}
 fn g2(coord: f64) -> f64 {
     0.5 + coord/2.0
 }
+fn g2_d(_coord: f64) -> f64 {
+    0.5
+}
+
+// Vector der Formfunktionen
+fn g_vec(coord: f64) -> OVector<f64,Const<2>> {
+    let mut m = OVector::<f64,Const<2>>::zeros();
+    m[0] = g1(coord);
+    m[1] = g2(coord);
+    return m;
+}
+
+// Stoffmatrix 
+fn C_tensor(emodul: f64, thickness: f64, nu: f64) -> Matrix3x3 {
+    let d = emodul*thickness/(1.0-nu.powi(2));
+    let mut m = Matrix3x3::zeros();
+    m[(0,0)] = d;
+    m[(1,1)] = d;
+    m[(2,2)] = 0.5*(1.0 - nu)*d;
+    m[(0,1)] = nu*d;
+    m[(1,0)] = nu*d;
+    return m;
+}
+
 
 
 // Assemblierung Elemente
