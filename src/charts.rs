@@ -7,3 +7,4 @@ trait Chart {
 
   fn map_reference_to_actual(input_ref: Input) -> Output; 
 }
+
