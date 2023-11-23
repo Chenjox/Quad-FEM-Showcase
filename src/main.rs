@@ -1,9 +1,10 @@
 // Einlesen eines Meshes
 // connectivität des Meshes
 
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, path::PathBuf};
 
 use nalgebra::{Const, Dyn, MatrixView2x1, OMatrix, OVector};
+use vtkio::{Vtk, model::{Version, DataSet, MetaData, UnstructuredGridPiece, Cells, VertexNumbers, CellType, Attributes, DataArray, Attribute}};
 
 type Points2D = OMatrix<f64, Const<2>, Dyn>;
 type Elements = OMatrix<usize, Const<4>, Dyn>;
@@ -257,7 +258,7 @@ fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
 }
 
 fn main() {
-    let m = get_FE_mesh(30.0, 3.0, 10, 10);
+    let m = get_FE_mesh(30.0, 3.0, 30, 10);
     write_elements_to_file(&m);
 
     
@@ -340,9 +341,10 @@ fn main() {
             }
         }
     }
-    println!("{:2.4}", global_matrix);
+    //println!("{:2.4}", global_matrix);
 
     let A_cop = global_matrix.clone();
+    let A_cop_inv = A_cop.try_inverse().unwrap();
     // Inhomogen Dirichlet
     let mut projection = OMatrix::<f64,Dyn,Const<1>>::zeros(solution_dim*m.points.ncols());
     let mut constrained = OMatrix::<bool,Dyn,Const<1>>::from_element(solution_dim*m.points.ncols(), false);
@@ -369,7 +371,7 @@ fn main() {
         rhs[i] = projection[i];
     }
 
-    println!("{:2.4}", global_matrix);
+    //println!("{:2.4}", global_matrix);
     // Solving the system
 
     // Hier landen die Unbekannten
@@ -378,7 +380,7 @@ fn main() {
     let A = global_matrix;
     let b = rhs;
 
-    println!("{:2.4}",b);
+    //println!("{:2.4}",b);
 
     let chol = A.cholesky().unwrap();
     let inv_a = chol.inverse();
@@ -388,5 +390,72 @@ fn main() {
 
     //let sol = A_cop * x;
 
-    println!("{}",x);
+    //println!("{}",x);
+
+    write_vkt_from_mesh(m, x);
+}
+
+fn write_vkt_from_mesh(mesh: FEMesh, solution: OMatrix<f64,Dyn,Const<1>>) {
+
+    let path = PathBuf::from(r"\test\test.vtu");
+
+    let mut points_vec = Vec::new();
+    for point in mesh.points.column_iter() {
+        points_vec.push(point[0]);
+        points_vec.push(point[1]);
+        points_vec.push(0.0);
+    }
+
+    let num_elems = mesh.elements.ncols();
+    let mut connectivity_vec = Vec::new();
+    let mut offset_vec = Vec::new();
+
+    for elems in mesh.elements.column_iter() {
+        for vertex in elems.row_iter() {
+            connectivity_vec.push(vertex[0] as u64);
+        }
+        offset_vec.push(connectivity_vec.len() as u64);
+    }
+
+    let mut result_vector = Vec::new();
+    for result in solution.row_iter() {
+        result_vector.push(result[0])
+    }
+
+    let sols = Attribute::DataArray(
+        DataArray {
+            name: String::from("Temperature"),
+            elem: vtkio::model::ElementType::Scalars { num_comp: 1, lookup_table: None },
+            data: vtkio::IOBuffer::F64(result_vector)
+        }
+    );
+
+    let vt = Vtk {
+        version: Version::new((0, 1)),
+        title: String::from("Heatmap"),
+        file_path: Some(path),
+        byte_order: vtkio::model::ByteOrder::LittleEndian,
+        data: DataSet::inline(
+            UnstructuredGridPiece {
+                points: points_vec.into(),
+                cells: Cells {
+                    cell_verts: VertexNumbers::XML { 
+                        offsets: offset_vec, 
+                        connectivity: connectivity_vec, 
+                    },
+                    types: vec![
+                        vec![CellType::Quad; num_elems]
+                    ].into_iter().flatten().collect::<Vec<CellType>>()
+                },
+                data: Attributes {
+                    point: vec![sols],
+                    cell: vec![]
+                }
+            }
+        ).into()
+    };
+
+    let mut f = File::create("test.vtu").unwrap();
+
+    vt.write_xml(&mut f).unwrap();
 }
