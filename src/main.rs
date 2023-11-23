@@ -47,7 +47,7 @@ fn get_FE_mesh(length: f64, height: f64, length_n: usize, height_n: usize) -> FE
         }
     }
 
-    println!("{}", p);
+    //println!("{}", p);
     count = 0;
     let mut elem = Elements::zeros(length_n * height_n);
 
@@ -81,12 +81,12 @@ fn get_FE_mesh(length: f64, height: f64, length_n: usize, height_n: usize) -> FE
 
     // FIXME: Orientierung ist wichtig! Immer gegen den Uhrzeigersinn
 
-    println!("{}", left);
-    println!("{}", bottom);
-    println!("{}", right);
-    println!("{}", top);
+    // println!("{}", left);
+    // println!("{}", bottom);
+    // println!("{}", right);
+    // println!("{}", top);
 
-    println!("{}", elem);
+    // println!("{}", elem);
 
     return FEMesh {
         points: p,
@@ -209,7 +209,7 @@ fn write_elements_to_file(elem: &FEMesh) {
     }
     let q = elem.elements.shape().1;
     for i in 0..q {
-        println!("{},{}/{}", p, q, i);
+        //println!("{},{}/{}", p, q, i);
         let cen_x = elem.points[(0, elem.elements[(0, i)])] * 0.25
             + elem.points[(0, elem.elements[(1, i)])] * 0.25
             + elem.points[(0, elem.elements[(2, i)])] * 0.25
@@ -267,7 +267,7 @@ fn main() {
         solution_dim * m.points.ncols(),
         solution_dim * m.points.ncols(),
     );
-    println!("{:?}", global_matrix.shape());
+    //println!("{:?}", global_matrix.shape());
 
     // Hier beginnt die Assemblierung der Steifigkeitsmatrix
     // Für jedes Element im Mesh
