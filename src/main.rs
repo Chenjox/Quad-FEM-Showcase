@@ -1,6 +1,9 @@
 // Einlesen eines Meshes
 // connectivität des Meshes
 
+pub mod mesh;
+
+
 use std::{fs::File, io::Write, path::PathBuf};
 
 use nalgebra::{Const, Dyn, MatrixView2x1, OMatrix, OVector};
