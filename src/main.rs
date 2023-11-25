@@ -3,11 +3,16 @@
 
 pub mod mesh;
 
-
 use std::{fs::File, io::Write, path::PathBuf};
 
 use nalgebra::{Const, Dyn, MatrixView2x1, OMatrix, OVector};
-use vtkio::{Vtk, model::{Version, DataSet, MetaData, UnstructuredGridPiece, Cells, VertexNumbers, CellType, Attributes, DataArray, Attribute}};
+use vtkio::{
+    model::{
+        Attribute, Attributes, CellType, Cells, DataArray, DataSet, MetaData,
+        UnstructuredGridPiece, Version, VertexNumbers,
+    },
+    Vtk,
+};
 
 type Points2D = OMatrix<f64, Const<2>, Dyn>;
 type Elements = OMatrix<usize, Const<4>, Dyn>;
@@ -264,7 +269,6 @@ fn main() {
     let m = get_FE_mesh(30.0, 3.0, 30, 10);
     write_elements_to_file(&m);
 
-    
     let solution_dim = 1;
     let mut global_matrix = OMatrix::<f64, Dyn, Dyn>::zeros(
         solution_dim * m.points.ncols(),
@@ -349,9 +353,10 @@ fn main() {
     let A_cop = global_matrix.clone();
     let A_cop_inv = A_cop.try_inverse().unwrap();
     // Inhomogen Dirichlet
-    let mut projection = OMatrix::<f64,Dyn,Const<1>>::zeros(solution_dim*m.points.ncols());
-    let mut constrained = OMatrix::<bool,Dyn,Const<1>>::from_element(solution_dim*m.points.ncols(), false);
-    
+    let mut projection = OMatrix::<f64, Dyn, Const<1>>::zeros(solution_dim * m.points.ncols());
+    let mut constrained =
+        OMatrix::<bool, Dyn, Const<1>>::from_element(solution_dim * m.points.ncols(), false);
+
     // Hier wird jetzt der Rand hardgecoded
     for i in m.bounds.bottom.iter() {
         projection[*i] = 100.;
@@ -361,15 +366,16 @@ fn main() {
         projection[*i] = 0.;
         constrained[*i] = true;
     }
-    let mut rhs : OMatrix<f64,Dyn,Const<1>> = OMatrix::<f64,Dyn,Const<1>>::zeros(m.points.ncols());
+    let mut rhs: OMatrix<f64, Dyn, Const<1>> =
+        OMatrix::<f64, Dyn, Const<1>>::zeros(m.points.ncols());
 
     for i in 0..m.points.ncols() {
         if constrained[i] {
             for j in 0..m.points.ncols() {
-                global_matrix[(i,j)] = 0.;
-                global_matrix[(j,i)] = 0.;
+                global_matrix[(i, j)] = 0.;
+                global_matrix[(j, i)] = 0.;
             }
-            global_matrix[(i,i)] = 1.;
+            global_matrix[(i, i)] = 1.;
         }
         rhs[i] = projection[i];
     }
@@ -398,8 +404,7 @@ fn main() {
     write_vkt_from_mesh(m, x);
 }
 
-fn write_vkt_from_mesh(mesh: FEMesh, solution: OMatrix<f64,Dyn,Const<1>>) {
-
+fn write_vkt_from_mesh(mesh: FEMesh, solution: OMatrix<f64, Dyn, Const<1>>) {
     let path = PathBuf::from(r"\test\test.vtu");
 
     let mut points_vec = Vec::new();
@@ -425,37 +430,38 @@ fn write_vkt_from_mesh(mesh: FEMesh, solution: OMatrix<f64,Dyn,Const<1>>) {
         result_vector.push(result[0])
     }
 
-    let sols = Attribute::DataArray(
-        DataArray {
-            name: String::from("Temperature"),
-            elem: vtkio::model::ElementType::Scalars { num_comp: 1, lookup_table: None },
-            data: vtkio::IOBuffer::F64(result_vector)
-        }
-    );
+    let sols = Attribute::DataArray(DataArray {
+        name: String::from("Temperature"),
+        elem: vtkio::model::ElementType::Scalars {
+            num_comp: 1,
+            lookup_table: None,
+        },
+        data: vtkio::IOBuffer::F64(result_vector),
+    });
 
     let vt = Vtk {
         version: Version::new((0, 1)),
         title: String::from("Heatmap"),
         file_path: Some(path),
         byte_order: vtkio::model::ByteOrder::LittleEndian,
-        data: DataSet::inline(
-            UnstructuredGridPiece {
-                points: points_vec.into(),
-                cells: Cells {
-                    cell_verts: VertexNumbers::XML { 
-                        offsets: offset_vec, 
-                        connectivity: connectivity_vec, 
-                    },
-                    types: vec![
-                        vec![CellType::Quad; num_elems]
-                    ].into_iter().flatten().collect::<Vec<CellType>>()
+        data: DataSet::inline(UnstructuredGridPiece {
+            points: points_vec.into(),
+            cells: Cells {
+                cell_verts: VertexNumbers::XML {
+                    offsets: offset_vec,
+                    connectivity: connectivity_vec,
                 },
-                data: Attributes {
-                    point: vec![sols],
-                    cell: vec![]
-                }
-            }
-        ).into()
+                types: vec![vec![CellType::Quad; num_elems]]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<CellType>>(),
+            },
+            data: Attributes {
+                point: vec![sols],
+                cell: vec![],
+            },
+        })
+        .into(),
     };
 
     let mut f = File::create("test.vtu").unwrap();
