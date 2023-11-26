@@ -5,6 +5,7 @@ pub mod mesh;
 
 use std::{fs::File, io::Write, path::PathBuf};
 
+use mesh::charts::{ConnectivityMatrix, Domain2D, StraightQuadrilaterial, Vertex2D};
 use nalgebra::{Const, Dyn, MatrixView2x1, OMatrix, OVector};
 use vtkio::{
     model::{
@@ -266,6 +267,22 @@ fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
 }
 
 fn main() {
+    let b = StraightQuadrilaterial::new_from_vector(vec![
+        Vertex2D::new(0.0, 0.0),
+        Vertex2D::new(3.0, 0.0),
+        Vertex2D::new(1.0, 1.0),
+        Vertex2D::new(0.0, 1.0),
+    ]);
+
+    let domain = Domain2D {
+        constituends: vec![Box::new(b)],
+        connectivity: ConnectivityMatrix::zeros(1, 1),
+    };
+
+    domain.get_fe_mesh(2, 2);
+}
+
+fn main2() {
     let m = get_FE_mesh(30.0, 3.0, 30, 10);
     write_elements_to_file(&m);
 
