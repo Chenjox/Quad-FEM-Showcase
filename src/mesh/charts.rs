@@ -1,6 +1,6 @@
 use std::{fs::File, io::Write};
 
-use nalgebra::{Const, DVector, Dyn, OMatrix, SVector};
+use nalgebra::{Const, DVector, Dyn, OMatrix, SVector, OVector, Matrix, ArrayStorage};
 
 type GenMatrixf64 = OMatrix<f64, Dyn, Dyn>;
 pub type ConnectivityMatrix = OMatrix<usize, Dyn, Dyn>;
@@ -375,106 +375,77 @@ impl<const DIM: usize> Domain2D<DIM> {
 
         // anzahl knoten davor +
         // anzahl knoten auf den oberen und rechten kanten sowie innere + anzahl auf den Randkanten
-        let anzahl_knoten_final = (n + 1) * (m + 1) + simple_count * 3 + n + m;
-        let mut p_chart_space_2 = OMatrix::<f64, Const<2>, Dyn>::zeros(anzahl_knoten_final);
-        // jetzt die höhere ordnung
-        let elem = elem;
-        count = 0;
-        for elm in 0..simple_count {
-            //print!("S {}, {:?}: ",elm,elem.shape());
-            let nodes = elem.column(elm);
-            //print!("|{:?}|",nodes.as_slice());
-            // die alten knoten gehören dazu
-            if count == 0 {
-                p_chart_space_2.set_column(count, &p_chart_space.column(nodes[0]));
-                count += 1;
-                //print!("0,");
+        
+        let mut placed_nodes = Vec::new();
+        let mut element_matrix = OMatrix::<usize,Dyn,Dyn>::zeros(9,simple_count);
+        let mut count = 0;
+        
+        for (elem_index,elm) in elem.column_iter().enumerate() {
+            let mut local = [OVector::<f64,Const<2>>::zeros(); 4];
+            
+            for i in 0..4 {
+                local[i] = p_chart_space.column(elm[i]).into()
             }
-            // ist in der ersten Zeile
-            if elm % m == 0 {
-                p_chart_space_2.set_column(count, &p_chart_space.column(nodes[1]));
-                count += 1;
-                //print!("1,");
+            let mut new_nodes = Vec::new();
+            
+            // aus dem einfachen Quad den großen Quad
+            for i in 0..4 {
+                new_nodes.push((i,local[i]))
             }
-            p_chart_space_2.set_column(count, &p_chart_space.column(nodes[2]));
-            count += 1;
-            //print!("2,");
-            // ist in der ersten spalte
-            if elm < m {
-                p_chart_space_2.set_column(count, &p_chart_space.column(nodes[3]));
-                count += 1;
-                //print!("3,");
-            }
-            // erste Zeile
-            if elm % m == 0 {
-                // local 4
-                let middle =
-                    &p_chart_space.column(nodes[0]) * 0.5 + &p_chart_space.column(nodes[1]) * 0.5;
-                p_chart_space_2.set_column(count, &middle);
-                count += 1;
-                //print!("4,");
-            }
-            // local 5
-            let middle =
-                &p_chart_space.column(nodes[1]) * 0.5 + &p_chart_space.column(nodes[2]) * 0.5;
-            p_chart_space_2.set_column(count, &middle);
-            count += 1;
-            //print!("5,");
+            // die mittleren sachen
+            new_nodes.push((4, local[0] * 0.5 + local[1] * 0.5));
+            new_nodes.push((5, local[1] * 0.5 + local[2] * 0.5));
+            new_nodes.push((6, local[2] * 0.5 + local[3] * 0.5));
+            new_nodes.push((7, local[3] * 0.5 + local[0] * 0.5));
+            
+            new_nodes.push((8, local[0] * 0.25 + local[1] * 0.25 + local[2] * 0.25 + local[3] * 0.25));
 
-            // local 6
-            let middle =
-                &p_chart_space.column(nodes[2]) * 0.5 + &p_chart_space.column(nodes[3]) * 0.5;
-            p_chart_space_2.set_column(count, &middle);
-            count += 1;
-            //print!("6,");
+            for (local_index,node) in new_nodes {
+                // ist der knoten schon drin?
+                let mut is_contained = false;
+                let mut contain_index = 0;
+                for (index, old_node) in placed_nodes.iter().enumerate() {
+                    let old_node : &Matrix<f64,Const<2>, Const<1>, ArrayStorage<f64,2,1>> = old_node;
+                    if (old_node - node).norm() < 1e-13 {
+                        is_contained = true;
+                        contain_index = index;
+                    }
+                }
 
-            // erste Spalte
-            if elm < m {
-                // local 7
-                let middle =
-                    &p_chart_space.column(nodes[0]) * 0.5 + &p_chart_space.column(nodes[3]) * 0.5;
-                p_chart_space_2.set_column(count, &middle);
-                count += 1;
-                //print!("7,");
-            }
-
-            // mittleres
-            let middle = &p_chart_space.column(nodes[0]) * 0.25
-                + &p_chart_space.column(nodes[1]) * 0.25
-                + &p_chart_space.column(nodes[2]) * 0.25
-                + &p_chart_space.column(nodes[3]) * 0.25;
-            p_chart_space_2.set_column(count, &middle);
-            count += 1;
-            //print!("8,");
-
-            //println!("|{},{}",elm,count);
-        }
-        let point_count = count;
-        // Jetzt die Elemente
-        let mut elem = OMatrix::<usize,Const<9>,Dyn>::zeros(n*m);
-        count = 0;
-        for i in 0..n {
-            for j in 0..m {
-                let row = i * (m+1);
-                elem[(0, count)] = j + row;
-                elem[(1, count)] = j + row + (m+1);
-                elem[(2, count)] = j + row + (m+1) + 1;
-                elem[(3, count)] = j + row + 1;
-                
-                //if count != 0 {connectivity_matrix[(count,count-1)] = 1;};
-                count += 1;
+                if is_contained {
+                    // irgendwas mit elementzuweiseung
+                    element_matrix[(local_index,elem_index)] = contain_index;
+                } else {
+                    placed_nodes.push(node);
+                    element_matrix[(local_index,elem_index)] = count;
+                    count += 1;
+                }
             }
         }
 
+        let mut p_chart_space_2 = OMatrix::<f64, Const<2>, Dyn>::zeros(placed_nodes.len());
+        for i in 0..placed_nodes.len() {
+            p_chart_space_2.set_column(i, &placed_nodes[i]);
+        }
+        
+        println!("{:2.2}",element_matrix);
         println!("{:2.2}", p_chart_space_2);
 
-        write_elements_to_file(&p_chart_space_2);
+        let mut actual_space = OMatrix::<f64,Const<DIM>, Dyn>::zeros(placed_nodes.len());
+
+        for i in 0..placed_nodes.len() {
+            let p_chart = p_chart_space_2.column(i);
+            let p_actual = self.constituends[0].get_vertex_at(p_chart[0], p_chart[1]);
+            actual_space.set_column(i, &p_actual) 
+        }
+
+        write_elements_to_file(&actual_space);
         //println!("{:2.2}", connectivity_matrix);
     }
 }
 
 
-fn write_elements_to_file(elem: &OMatrix<f64, Const<2>, Dyn>) {
+fn write_elements_to_file<const DIM: usize>(elem: &OMatrix<f64, Const<DIM>, Dyn>) {
     let p = elem.shape().1;
     let mut f = File::create("output.csv").expect("Unable to create file");
     for i in 0..p {

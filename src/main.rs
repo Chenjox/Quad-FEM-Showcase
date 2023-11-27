@@ -279,7 +279,7 @@ fn main() {
         connectivity: ConnectivityMatrix::zeros(1, 1),
     };
 
-    domain.get_fe_mesh(2, 2);
+    domain.get_fe_mesh(3, 4);
 }
 
 fn main2() {
