@@ -2,6 +2,7 @@
 // connectivität des Meshes
 
 pub mod mesh;
+pub mod element;
 
 use std::{fs::File, io::Write, path::PathBuf};
 
@@ -270,7 +271,7 @@ fn main() {
     let b = StraightQuadrilaterial::new_from_vector(vec![
         Vertex2D::new(0.0, 0.0),
         Vertex2D::new(3.0, 0.0),
-        Vertex2D::new(1.0, 1.0),
+        Vertex2D::new(3.0, 1.0),
         Vertex2D::new(0.0, 1.0),
     ]);
 
@@ -279,7 +280,7 @@ fn main() {
         connectivity: ConnectivityMatrix::zeros(1, 1),
     };
 
-    domain.get_fe_mesh(3, 4);
+    domain.get_fe_mesh(5, 5);
 }
 
 fn main2() {
