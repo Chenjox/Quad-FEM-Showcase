@@ -56,6 +56,7 @@ Transfinite Line {12,-11,6,7} = 2 Using Progression 1;
 
 Coherence;
 
+// SetOrder 1;
 Recombine Surface {100,101,102,103};
 Mesh 2;
 Save "test.msh4";

@@ -1,13 +1,13 @@
 // Einlesen eines Meshes
 // connectivität des Meshes
 
-pub mod mesh;
 pub mod element;
+pub mod mesh;
 
-use std::{fs::File, io::Write, path::PathBuf};
+use std::{collections::HashMap, fs::File, io::Write, path::PathBuf};
 
-use mesh::charts::{ConnectivityMatrix, Domain2D, StraightQuadrilaterial, Vertex2D};
-use nalgebra::{Const, Dyn, MatrixView2x1, OMatrix, OVector};
+use mshio::ElementType;
+use nalgebra::{coordinates, Const, Dyn, MatrixView2x1, OMatrix, OVector, SVector};
 use vtkio::{
     model::{
         Attribute, Attributes, CellType, Cells, DataArray, DataSet, MetaData,
@@ -16,99 +16,10 @@ use vtkio::{
     Vtk,
 };
 
-type Points2D = OMatrix<f64, Const<2>, Dyn>;
-type Elements = OMatrix<usize, Const<4>, Dyn>;
-type BoundList = OVector<usize, Dyn>;
-type Matrix3x3 = OMatrix<f64, Const<3>, Const<3>>;
-type Matrix2x2 = OMatrix<f64, Const<2>, Const<2>>;
-// TODO: Boundaries abspeichern!
-struct Boundaries {
-    left: BoundList,
-    right: BoundList,
-    top: BoundList,
-    bottom: BoundList,
-}
-
-struct FEMesh {
-    points: Points2D,
-    elements: Elements,
-    bounds: Boundaries,
-}
-
-impl FEMesh {
-    pub fn get_point(&self, index: usize) -> MatrixView2x1<f64> {
-        return self.points.column(index);
-    }
-}
-
-// FIXME: Boundaries abspeichern!
-fn get_FE_mesh(length: f64, height: f64, length_n: usize, height_n: usize) -> FEMesh {
-    // Get increase
-    let l_increase = length / (length_n as f64);
-    let h_increase = height / (height_n as f64);
-
-    let mut p = Points2D::zeros((length_n + 1) * (height_n + 1));
-    let mut count = 0;
-    for i in 0..=length_n {
-        for j in 0..=height_n {
-            p[(0, count)] = (i as f64) * l_increase;
-            p[(1, count)] = (j as f64) * h_increase;
-            count += 1;
-        }
-    }
-
-    //println!("{}", p);
-    count = 0;
-    let mut elem = Elements::zeros(length_n * height_n);
-
-    for i in 0..length_n {
-        for j in 0..height_n {
-            let row = i * (height_n + 1);
-            elem[(0, count)] = row + j;
-            elem[(1, count)] = row + j + (height_n + 1);
-            elem[(2, count)] = row + j + 1 + (height_n + 1);
-            elem[(3, count)] = row + j + 1;
-            count += 1;
-        }
-    }
-    // Boundaries
-    let mut left = BoundList::zeros(height_n + 1);
-    let mut right = BoundList::zeros(height_n + 1);
-    let mut top = BoundList::zeros(length_n + 1);
-    let mut bottom = BoundList::zeros(length_n + 1);
-
-    // Linker und rechter Rand
-    for j in 0..=height_n {
-        left[(height_n - j)] = j;
-        right[(j)] = j + (length_n + 1) * (height_n + 1) - (height_n + 1);
-    }
-
-    // Oberer und unterer Rand
-    for i in 0..=length_n {
-        bottom[(i)] = i * (height_n + 1);
-        top[(length_n - i)] = i * (height_n + 1) + height_n;
-    }
-
-    // FIXME: Orientierung ist wichtig! Immer gegen den Uhrzeigersinn
-
-    // println!("{}", left);
-    // println!("{}", bottom);
-    // println!("{}", right);
-    // println!("{}", top);
-
-    // println!("{}", elem);
-
-    return FEMesh {
-        points: p,
-        elements: elem,
-        bounds: Boundaries {
-            left,
-            right,
-            top,
-            bottom,
-        },
-    };
-}
+use crate::mesh::{
+    elements::{Quad4Element, ReferenceElement},
+    femesh::FEMesh,
+};
 
 // Connectivität zu Quad Elementen
 
@@ -180,18 +91,6 @@ fn gd_vec(coord: f64) -> OVector<f64, Const<2>> {
     return m;
 }
 
-// Stoffmatrix
-fn C_tensor(emodul: f64, thickness: f64, nu: f64) -> Matrix3x3 {
-    let d = emodul * thickness / (1.0 - nu.powi(2));
-    let mut m = Matrix3x3::zeros();
-    m[(0, 0)] = d;
-    m[(1, 1)] = d;
-    m[(2, 2)] = 0.5 * (1.0 - nu) * d;
-    m[(0, 1)] = nu * d;
-    m[(1, 0)] = nu * d;
-    return m;
-}
-
 // Assemblierung Elemente
 
 // Assemblierung Randbedingungen
@@ -203,34 +102,6 @@ fn C_tensor(emodul: f64, thickness: f64, nu: f64) -> Matrix3x3 {
 // Rückwärtseinsetzen
 
 // Visualisierung
-
-fn write_elements_to_file(elem: &FEMesh) {
-    let p = elem.points.shape().1;
-    let mut f = File::create("output.csv").expect("Unable to create file");
-    for i in 0..p {
-        write!(
-            &mut f,
-            "{} {} {}\n",
-            elem.points[(0, i)],
-            elem.points[(1, i)],
-            i
-        )
-        .unwrap();
-    }
-    let q = elem.elements.shape().1;
-    for i in 0..q {
-        //println!("{},{}/{}", p, q, i);
-        let cen_x = elem.points[(0, elem.elements[(0, i)])] * 0.25
-            + elem.points[(0, elem.elements[(1, i)])] * 0.25
-            + elem.points[(0, elem.elements[(2, i)])] * 0.25
-            + elem.points[(0, elem.elements[(3, i)])] * 0.25;
-        let cen_y = elem.points[(1, elem.elements[(0, i)])] * 0.25
-            + elem.points[(1, elem.elements[(1, i)])] * 0.25
-            + elem.points[(1, elem.elements[(2, i)])] * 0.25
-            + elem.points[(1, elem.elements[(3, i)])] * 0.25;
-        write!(&mut f, "{} {} {}\n", cen_x, cen_y, i).unwrap();
-    }
-}
 
 fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
     match order {
@@ -267,22 +138,22 @@ fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
     }
 }
 
+const DIM: usize = 2;
+
 fn main() {
-    let b = StraightQuadrilaterial::new_from_vector(vec![
-        Vertex2D::new(0.0, 0.0),
-        Vertex2D::new(3.0, 0.0),
-        Vertex2D::new(3.0, 1.0),
-        Vertex2D::new(0.0, 1.0),
-    ]);
+    let m = FEMesh::<DIM>::read_from_gmsh(
+        "test.msh4",
+        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
+        vec![Box::new(Quad4Element {})],
+    )
+    .unwrap();
 
-    let domain = Domain2D {
-        constituends: vec![Box::new(b)],
-        connectivity: ConnectivityMatrix::zeros(1, 1),
-    };
-
-    domain.get_fe_mesh(5, 5);
+    //if let Some(entities) = &msh.data.entities {
+    //    println!("{:?}",entities.surfaces);
+    //}
 }
 
+/*
 fn main2() {
     let m = get_FE_mesh(30.0, 3.0, 30, 10);
     write_elements_to_file(&m);
@@ -422,67 +293,4 @@ fn main2() {
     write_vkt_from_mesh(m, x);
 }
 
-fn write_vkt_from_mesh(mesh: FEMesh, solution: OMatrix<f64, Dyn, Const<1>>) {
-    let path = PathBuf::from(r"\test\test.vtu");
-
-    let mut points_vec = Vec::new();
-    for point in mesh.points.column_iter() {
-        points_vec.push(point[0]);
-        points_vec.push(point[1]);
-        points_vec.push(0.0);
-    }
-
-    let num_elems = mesh.elements.ncols();
-    let mut connectivity_vec = Vec::new();
-    let mut offset_vec = Vec::new();
-
-    for elems in mesh.elements.column_iter() {
-        for vertex in elems.row_iter() {
-            connectivity_vec.push(vertex[0] as u64);
-        }
-        offset_vec.push(connectivity_vec.len() as u64);
-    }
-
-    let mut result_vector = Vec::new();
-    for result in solution.row_iter() {
-        result_vector.push(result[0])
-    }
-
-    let sols = Attribute::DataArray(DataArray {
-        name: String::from("Temperature"),
-        elem: vtkio::model::ElementType::Scalars {
-            num_comp: 1,
-            lookup_table: None,
-        },
-        data: vtkio::IOBuffer::F64(result_vector),
-    });
-
-    let vt = Vtk {
-        version: Version::new((0, 1)),
-        title: String::from("Heatmap"),
-        file_path: Some(path),
-        byte_order: vtkio::model::ByteOrder::LittleEndian,
-        data: DataSet::inline(UnstructuredGridPiece {
-            points: points_vec.into(),
-            cells: Cells {
-                cell_verts: VertexNumbers::XML {
-                    offsets: offset_vec,
-                    connectivity: connectivity_vec,
-                },
-                types: vec![vec![CellType::Quad; num_elems]]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<CellType>>(),
-            },
-            data: Attributes {
-                point: vec![sols],
-                cell: vec![],
-            },
-        })
-        .into(),
-    };
-
-    let mut f = File::create("test.vtu").unwrap();
-
-    vt.write_xml(&mut f).unwrap();
-}
+*/
