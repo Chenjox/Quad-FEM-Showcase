@@ -200,7 +200,8 @@ fn main() {
             let jacobian = jacobian;
             let inv_jacobian = jacobian.try_inverse().unwrap();
 
-            let determinant = jacobian[(0,0)] * jacobian[(1,1)] - jacobian[(0,1)] * jacobian[(1,0)];
+            let determinant =
+                jacobian[(0, 0)] * jacobian[(1, 1)] - jacobian[(0, 1)] * jacobian[(1, 0)];
 
             // Transformation auf tatsächliche Elemente
             // println!("{}", jacobian);
@@ -248,27 +249,33 @@ fn main() {
         // Rechte Seite Vektor:
 
         if let Some(boundary_list) = m.element_boundary_map.get(&current_element_index) {
+            let gauss_points = get_1d_gauss_rule(2);
             for boundary_element_index in boundary_list {
                 let nodes = m.boundary_elements_local.column(*boundary_element_index);
                 let nodes = nodes.as_slice();
-                match nodes {
-                    [0,1] => { // dt = d\xi, // \eta = -1
-
-                    },
-                    [1,2] => { // dt = d\eta // \xi = 1
-
-                    },
-                    [2,3] => { // dt = d\xi // \eta = 1
-
-                    },
-                    [3,0] => { // dt = d\xi // \xi = -1
-
-                    }
-                    _ => {
-
+                for gauss in gauss_points.column_iter() {
+                    let xi_1 = gauss[0];
+                    let weight = gauss[1];
+                    match nodes {
+                        [0, 1] => {
+                            // dt = d\xi, // \eta = -1
+                            let coords = SVector::<f64, 2>::new(xi_1, -1.0);
+                            let shape_function = ref_element.get_shape_function_derivatives(coords);
+                            println!("{}", shape_function);
+                        }
+                        [1, 2] => { // dt = d\eta // \xi = 1
+                        }
+                        [2, 3] => { // dt = d\xi // \eta = 1
+                            let coords = SVector::<f64, 2>::new(xi_1, 1.0);
+                            let shape_function = ref_element.get_shape_function_derivatives(coords);
+                            println!("{}", shape_function);
+                        }
+                        [3, 0] => { // dt = d\xi // \xi = -1
+                        }
+                        _ => {}
                     }
                 }
-                println!("{:?}",nodes);
+                println!("{:?}", nodes);
             }
             //println!("{:?}",boundary_list)
         }
@@ -293,9 +300,7 @@ fn main() {
                 }
             }
         }
-
     }
-
 
     // Jetzt die Ränder
     // Neumann Rand
