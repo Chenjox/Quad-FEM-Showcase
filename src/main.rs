@@ -4,10 +4,17 @@
 pub mod element;
 pub mod mesh;
 
+use core::num;
 use std::{collections::HashMap, fs::File, io::Write, path::PathBuf};
 
+use crate::mesh::{
+    elements::{Quad4Element, ReferenceElement},
+    femesh::FEMesh,
+};
 use mshio::ElementType;
-use nalgebra::{coordinates, Const, Dyn, MatrixView2x1, OMatrix, OVector, SVector};
+use nalgebra::{coordinates, Const, Dim, Dyn, MatrixView2x1, OMatrix, OVector, SMatrix, SVector};
+use nalgebra_sparse::SparseEntryMut::NonZero;
+use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use vtkio::{
     model::{
         Attribute, Attributes, CellType, Cells, DataArray, DataSet, MetaData,
@@ -16,80 +23,7 @@ use vtkio::{
     Vtk,
 };
 
-use crate::mesh::{
-    elements::{Quad4Element, ReferenceElement},
-    femesh::FEMesh,
-};
-
 // Connectivität zu Quad Elementen
-
-// Lineare Shape Functions (Locking)
-fn g1(coord: f64) -> f64 {
-    0.5 - coord / 2.0
-}
-fn g1_d(_coord: f64) -> f64 {
-    -0.5
-}
-fn g2(coord: f64) -> f64 {
-    0.5 + coord / 2.0
-}
-fn g2_d(_coord: f64) -> f64 {
-    0.5
-}
-//
-
-fn shape_functions_2d(index: usize, xi_1: f64, xi_2: f64) -> f64 {
-    return g2_vec(xi_1, xi_2)[index];
-}
-
-fn shape_functions_2d_grad(index: usize, xi_1: f64, xi_2: f64) -> OMatrix<f64, Const<2>, Const<1>> {
-    return OMatrix::<f64, Const<2>, Const<1>>::new(
-        g2_dxi1_vec(xi_1, xi_2)[index],
-        g2_dxi2_vec(xi_1, xi_2)[index],
-    );
-}
-
-fn g2_vec(xi_1: f64, xi_2: f64) -> OVector<f64, Const<4>> {
-    let mut m = OVector::<f64, Const<4>>::zeros();
-    m[0] = g1(xi_1) * g1(xi_2);
-    m[1] = g2(xi_1) * g1(xi_2);
-    m[2] = g2(xi_1) * g2(xi_2);
-    m[3] = g1(xi_1) * g2(xi_2);
-    return m;
-}
-
-fn g2_dxi1_vec(xi_1: f64, xi_2: f64) -> OVector<f64, Const<4>> {
-    let mut m = OVector::<f64, Const<4>>::zeros();
-    m[0] = g1_d(xi_1) * g1(xi_2);
-    m[1] = g2_d(xi_1) * g1(xi_2);
-    m[2] = g2_d(xi_1) * g2(xi_2);
-    m[3] = g1_d(xi_1) * g2(xi_2);
-    return m;
-}
-
-fn g2_dxi2_vec(xi_1: f64, xi_2: f64) -> OVector<f64, Const<4>> {
-    let mut m = OVector::<f64, Const<4>>::zeros();
-    m[0] = g1(xi_1) * g1_d(xi_2);
-    m[1] = g2(xi_1) * g1_d(xi_2);
-    m[2] = g2(xi_1) * g2_d(xi_2);
-    m[3] = g1(xi_1) * g2_d(xi_2);
-    return m;
-}
-
-// Vector der Formfunktionen
-fn g_vec(coord: f64) -> OVector<f64, Const<2>> {
-    let mut m = OVector::<f64, Const<2>>::zeros();
-    m[0] = g1(coord);
-    m[1] = g2(coord);
-    return m;
-}
-
-fn gd_vec(coord: f64) -> OVector<f64, Const<2>> {
-    let mut m = OVector::<f64, Const<2>>::zeros();
-    m[0] = g1_d(coord);
-    m[1] = g2_d(coord);
-    return m;
-}
 
 // Assemblierung Elemente
 
@@ -140,6 +74,35 @@ fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
 
 const DIM: usize = 2;
 
+fn compute_sparsity_pattern<const DIM: usize>(
+    mesh: &FEMesh<DIM>,
+    num_dof_per_node: usize,
+) -> CsrMatrix<f64> {
+    let num_dofs = num_dof_per_node * mesh.num_nodes();
+
+    let mut coo: CooMatrix<f64> = CooMatrix::new(num_dofs, num_dofs);
+
+    for element in mesh.elements.column_iter() {
+        for node_i in 0..element.nrows() {
+            for node_j in 0..element.nrows() {
+                let pos_i = element[node_i] * num_dof_per_node;
+                let pos_j = element[node_j] * num_dof_per_node;
+
+                for i in 0..(num_dof_per_node * num_dof_per_node) {
+                    let i_k = i % num_dof_per_node;
+                    let j_k = i / num_dof_per_node;
+
+                    //println!("{},{},{}",i,i_k,j_k)
+                    coo.push(pos_i + i_k, pos_j + j_k, 0.0);
+                }
+            }
+        }
+    }
+
+    let mut csr = CsrMatrix::from(&coo);
+    return csr;
+}
+
 fn main() {
     let m = FEMesh::<DIM>::read_from_gmsh(
         "test.msh4",
@@ -148,9 +111,147 @@ fn main() {
     )
     .unwrap();
 
-    //if let Some(entities) = &msh.data.entities {
-    //    println!("{:?}",entities.surfaces);
+    // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
+    let num_dof_per_node = 2;
+
+    let num_dofs = num_dof_per_node * m.num_nodes();
+
+    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
+
+    //let mut dense_stiffness = OMatrix::<f64,Dyn,Dyn>::zeros(num_dofs,num_dofs);
+    //for values in csr.triplet_iter() {
+    //    dense_stiffness[(values.0,values.1)] = 1.0;
     //}
+    //println!("{}",dense_stiffness)
+
+    // Assemblierung der Steifigkeitsmatrix
+    // Jedes Element im Mesh
+    for element in m
+        .elements
+        .column_iter()
+        .enumerate()
+        .map(|f| (m.ref_element_index[f.0], f.1))
+    {
+        //println!("{},{}", element.0, element.1);
+
+        let ref_element = &m.ref_elements[element.0];
+        let num_element_nodes = element.1.nrows();
+        let gauss = get_gauss_rule(2);
+
+        // Lokale Steifigkeitsmatrix
+        let mut k = OMatrix::<f64, Dyn, Dyn>::zeros(
+            num_dof_per_node * num_element_nodes,
+            num_dof_per_node * num_element_nodes,
+        );
+
+        for gauss_point in gauss.column_iter() {
+            let xi_1 = gauss_point[0];
+            let xi_2 = gauss_point[1];
+            let weight = gauss_point[2];
+
+            let ref_coordinates = SVector::<f64, 2>::new(xi_1, xi_2);
+
+            //let normal_func = ref_element.get_shape_functions(ref_coordinates);
+
+            //println!("{}",normal_func);
+
+            let derivatives = ref_element.get_shape_function_derivatives(ref_coordinates);
+
+            //println!("{}",derivatives);
+
+            let mut jacobian = SMatrix::<f64, DIM, DIM>::zeros();
+            for (local_index, point_index) in element.1.iter().enumerate() {
+                let point_index = *point_index;
+                let coords = m.get_node_coordinates(point_index);
+
+                // Grandienten einer shape function in beide richtungen
+                let gradient = derivatives.row(local_index);
+                let loc_jacobian = coords * gradient;
+
+                jacobian = jacobian + loc_jacobian;
+            }
+            let jacobian = jacobian;
+            let inv_jacobian = jacobian.try_inverse().unwrap();
+
+            // Transformation auf tatsächliche Elemente
+            // println!("{}", jacobian);
+            let derivatives = (inv_jacobian * derivatives.transpose()).transpose();
+
+            for j in element.1.row_iter().enumerate() {
+                let virt_node_number = j.0;
+                for i in element.1.row_iter().enumerate() {
+                    let real_node_number = i.0;
+
+                    // mit den virtuellen Funktionen wird getestet!
+                    let B_mat_i = {
+                        let mut result = SMatrix::<f64, 3, 2>::zeros();
+                        result[(0, 0)] = derivatives[(virt_node_number, 0)]; // N1x
+                        result[(1, 1)] = derivatives[(virt_node_number, 1)]; // N1y
+                        result[(2, 0)] = derivatives[(virt_node_number, 1)]; // N1y
+                        result[(2, 1)] = derivatives[(virt_node_number, 0)]; // N1x
+                        result
+                    };
+                    let B_mat_j = {
+                        let mut result = SMatrix::<f64, 3, 2>::zeros();
+                        result[(0, 0)] = derivatives[(real_node_number, 0)]; // N1x
+                        result[(1, 1)] = derivatives[(real_node_number, 1)]; // N1y
+                        result[(2, 0)] = derivatives[(real_node_number, 1)]; // N1y
+                        result[(2, 1)] = derivatives[(real_node_number, 0)]; // N1x
+                        result
+                    };
+
+                    let result = weight * B_mat_i.transpose() * B_mat_j;
+                    // Offset
+                    for i in 0..(num_dof_per_node * num_dof_per_node) {
+                        let i_k = i % num_dof_per_node;
+                        let j_k = i / num_dof_per_node;
+
+                        k[(
+                            real_node_number * num_dof_per_node + i_k,
+                            virt_node_number * num_dof_per_node + j_k,
+                        )] += result[(i_k, j_k)];
+                    }
+                }
+            }
+        }
+        //println!("{:3.3}", k);
+
+        for node_i in 0..element.1.nrows() {
+            for node_j in 0..element.1.nrows() {
+                let pos_i = element.1[node_i] * num_dof_per_node;
+                let pos_j = element.1[node_j] * num_dof_per_node;
+
+                for i in 0..(num_dof_per_node * num_dof_per_node) {
+                    let i_k = i % num_dof_per_node;
+                    let j_k = i / num_dof_per_node;
+
+                    //println!("{},{},{}",i,i_k,j_k)
+                    if let NonZero(entry) = stiffness.index_entry_mut(pos_i + i_k, pos_j + j_k) {
+                        *entry += k[(
+                            node_i * num_dof_per_node + i_k,
+                            node_j * num_dof_per_node + j_k,
+                        )];
+                    };
+                }
+            }
+        }
+    }
+
+    stiffness
+
+    // Jetzt die Ränder
+    // Neumann Rand
+
+    // Dirichlet Rand
+    /*
+    let mut dense_stiffness = OMatrix::<f64,Dyn,Dyn>::zeros(num_dofs,num_dofs);
+    for values in stiffness.triplet_iter() {
+        dense_stiffness[(values.0,values.1)] = *values.2;
+    }
+    println!("{:3.3}",dense_stiffness)
+    */
 }
 
 /*
@@ -188,8 +289,8 @@ fn main2() {
 
             let mut jacobian: Matrix2x2 = Matrix2x2::zeros();
             for (local_index, point_index) in elem.iter().enumerate() {
-                let point_index = *point_index;
-                let coords = m.get_point(point_index);
+            let point_index = *point_index;
+            let coords = m.get_point(point_index);
 
                 let gradient = OMatrix::<f64, Const<2>, Const<1>>::new(
                     shape_deriv_1[local_index],

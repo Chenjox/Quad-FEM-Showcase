@@ -48,15 +48,15 @@ Physical Curve("Top",3)    = {5,6};
 Physical Surface("Domain",1) = {100,101,102,103};
 
 // // Viele Linien, und vorallem Knoten
-Transfinite Line {1,9,-12,8} = 2 Using Progression 1;
-Transfinite Line {2,3,10,-9} = 2 Using Progression 1;
+Transfinite Line {1,9,-12,8}  = 2 Using Progression 1;
+Transfinite Line {2,3,10,-9}  = 2 Using Progression 1;
 Transfinite Line {-10,4,5,11} = 2 Using Progression 1;
 Transfinite Line {12,-11,6,7} = 2 Using Progression 1;
 
 
 Coherence;
-
 // SetOrder 1;
 Recombine Surface {100,101,102,103};
 Mesh 2;
+RenumberMeshNodes;
 Save "test.msh4";

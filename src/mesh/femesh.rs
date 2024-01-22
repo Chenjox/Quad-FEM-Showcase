@@ -1,10 +1,11 @@
 use std::{
     collections::HashMap,
     error::{self, Error},
+    slice::Iter,
 };
 
 use mshio::ElementType;
-use nalgebra::{Const, Dyn, OMatrix, OVector, SVector};
+use nalgebra::{Const, Dyn, Matrix, OMatrix, OVector, SVector, ViewStorage};
 
 use crate::mesh::elements::Quad4Element;
 
@@ -21,7 +22,7 @@ use super::elements::ReferenceElement;
 /// Ränder sind (n-1) Elemente (oder vllt wird das ander numerisch verarbeitet)
 pub struct FEMesh<const DIM: usize> {
     pub coordinates: OMatrix<f64, Const<DIM>, Dyn>, // Der Index der Coordinaten ist der Index des Knotens
-    pub ref_elements: Vec<Box<dyn ReferenceElement>>, // Die referenzelemente mit der Bilinearform
+    pub ref_elements: Vec<Box<dyn ReferenceElement<DIM>>>, // Die referenzelemente mit der Bilinearform
     pub ref_element_index: OVector<usize, Dyn>, // Every Element gets a reference element via this index
     pub elements: OMatrix<usize, Dyn, Dyn>,     // All the elements
     pub boundary_type: OMatrix<usize, Const<2>, Dyn>, // the type of the reference element of this specific boundary, and its physical tag (multiple elements may or may not belong to the same boundary)
@@ -29,10 +30,28 @@ pub struct FEMesh<const DIM: usize> {
 }
 
 impl<const DIM: usize> FEMesh<DIM> {
+    pub fn num_nodes(&self) -> usize {
+        return self.coordinates.ncols();
+    }
+
+    pub fn get_node_coordinates(
+        &self,
+        node_index: usize,
+    ) -> Matrix<
+        f64,
+        Const<DIM>,
+        Const<1>,
+        ViewStorage<'_, f64, Const<DIM>, Const<1>, Const<1>, Const<DIM>>,
+    > {
+        return self.coordinates.column(node_index);
+    }
+}
+
+impl<const DIM: usize> FEMesh<DIM> {
     pub fn read_from_gmsh(
         file_path: &str,
         mapper: HashMap<ElementType, usize>,
-        ref_elements: Vec<Box<dyn ReferenceElement>>,
+        ref_elements: Vec<Box<dyn ReferenceElement<DIM>>>,
     ) -> Result<FEMesh<DIM>, Box<dyn Error>> {
         let msh_bytes = std::fs::read(file_path)?;
         let parser_result = mshio::parse_msh_bytes(msh_bytes.as_slice());
