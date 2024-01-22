@@ -72,6 +72,30 @@ fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
     }
 }
 
+fn get_1d_gauss_rule(order: usize) -> OMatrix<f64, Const<2>, Dyn> {
+    match order {
+        1 => {
+            let mut m = OMatrix::<f64, Const<2>, Dyn>::zeros(1);
+            m[(0, 0)] = 0.;
+            m[(1, 0)] = 2.;
+            m
+        }
+        2 => {
+            let mut m = OMatrix::<f64, Const<2>, Dyn>::zeros(2);
+            m[(0, 0)] = (1. / 3.0_f64).sqrt();
+            m[(1, 0)] = 1.;
+
+            m[(0, 1)] = -(1. / 3.0_f64).sqrt();
+            m[(1, 1)] = 1.;
+
+            m
+        }
+        _ => {
+            panic!()
+        }
+    }
+}
+
 const DIM: usize = 2;
 
 fn compute_sparsity_pattern<const DIM: usize>(
@@ -111,8 +135,6 @@ fn main() {
     )
     .unwrap();
 
-    m.match_boundaries_to_elements();
-
     // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
     let num_dof_per_node = 2;
 
@@ -134,10 +156,11 @@ fn main() {
         .elements
         .column_iter()
         .enumerate()
-        .map(|f| (m.ref_element_index[f.0], f.1))
+        .map(|f| (m.ref_element_index[f.0], f.1, f.0))
     {
         //println!("{},{}", element.0, element.1);
 
+        let current_element_index = element.2;
         let ref_element = &m.ref_elements[element.0];
         let num_element_nodes = element.1.nrows();
         let gauss = get_gauss_rule(2);
@@ -222,6 +245,35 @@ fn main() {
         }
         //println!("{:3.3}", k);
 
+        // Rechte Seite Vektor:
+
+        if let Some(boundary_list) = m.element_boundary_map.get(&current_element_index) {
+            for boundary_element_index in boundary_list {
+                let nodes = m.boundary_elements_local.column(*boundary_element_index);
+                let nodes = nodes.as_slice();
+                match nodes {
+                    [0,1] => { // dt = d\xi, // \eta = -1
+
+                    },
+                    [1,2] => { // dt = d\eta // \xi = 1
+
+                    },
+                    [2,3] => { // dt = d\xi // \eta = 1
+
+                    },
+                    [3,0] => { // dt = d\xi // \xi = -1
+
+                    }
+                    _ => {
+
+                    }
+                }
+                println!("{:?}",nodes);
+            }
+            //println!("{:?}",boundary_list)
+        }
+
+        // Einbauen in die Stiffness Matrix
         for node_i in 0..element.1.nrows() {
             for node_j in 0..element.1.nrows() {
                 let pos_i = element.1[node_i] * num_dof_per_node;
@@ -241,6 +293,7 @@ fn main() {
                 }
             }
         }
+
     }
 
 
