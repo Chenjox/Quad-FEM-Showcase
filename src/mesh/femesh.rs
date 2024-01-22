@@ -1,3 +1,4 @@
+use core::slice;
 use std::{
     collections::HashMap,
     error::{self, Error},
@@ -29,6 +30,16 @@ pub struct FEMesh<const DIM: usize> {
     pub boundary_elements: OMatrix<usize, Dyn, Dyn>,  // All the Boundaries (as Elements...)
 }
 
+fn find2(haystack: &[usize], needle: &[usize]) -> Option<usize> { //https://stackoverflow.com/questions/57118537/rust-how-can-i-search-a-vec-for-a-subset-and-find-the-start-index-of-the-sub
+    for i in 0..haystack.len()-needle.len()+1 {
+        if haystack[i..i+needle.len()] == needle[..] {
+            return Some(i);
+        }
+    }
+    None
+}
+
+
 impl<const DIM: usize> FEMesh<DIM> {
     pub fn num_nodes(&self) -> usize {
         return self.coordinates.ncols();
@@ -44,6 +55,34 @@ impl<const DIM: usize> FEMesh<DIM> {
         ViewStorage<'_, f64, Const<DIM>, Const<1>, Const<1>, Const<DIM>>,
     > {
         return self.coordinates.column(node_index);
+    }
+
+    pub fn match_boundaries_to_elements(&self) {
+
+        // Abbildung: Randelement zu Randkurven des Elements
+        // Pro Randkurve: definierte Funktion aus perspektive der Teilrandkurve
+        // Abbildung: 
+
+        let mut boundary_containing_elements = Vec::new();
+        for boundary_curve in self.boundary_elements.column_iter().enumerate() {
+            let (boundary_curve_index,boundary_curve) = boundary_curve;
+            for element in self.elements.column_iter().enumerate() {
+                let (element_index,element) = element;
+                let slice = element.as_slice();
+                let slice = &[slice, &[slice[0]]].concat();
+                //println!("{} in {}?",boundary_curve.transpose(), element.transpose());
+                if let Some(index) = find2(slice, boundary_curve.as_slice()) {
+                    println!("{}",element_index);
+                    // Mark the Element in Question
+                    // Create the Map: Element -> Boundary Elements
+                    // Create the 
+                    boundary_containing_elements.push((element_index,boundary_curve_index));
+                    // 
+                    break;
+                };
+            }
+        }
+        println!("{:?}",boundary_containing_elements);
     }
 }
 

@@ -111,6 +111,8 @@ fn main() {
     )
     .unwrap();
 
+    m.match_boundaries_to_elements();
+
     // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
     let num_dof_per_node = 2;
 
@@ -175,6 +177,8 @@ fn main() {
             let jacobian = jacobian;
             let inv_jacobian = jacobian.try_inverse().unwrap();
 
+            let determinant = jacobian[(0,0)] * jacobian[(1,1)] - jacobian[(0,1)] * jacobian[(1,0)];
+
             // Transformation auf tatsächliche Elemente
             // println!("{}", jacobian);
             let derivatives = (inv_jacobian * derivatives.transpose()).transpose();
@@ -202,7 +206,7 @@ fn main() {
                         result
                     };
 
-                    let result = weight * B_mat_i.transpose() * B_mat_j;
+                    let result = weight * B_mat_i.transpose() * B_mat_j * determinant;
                     // Offset
                     for i in 0..(num_dof_per_node * num_dof_per_node) {
                         let i_k = i % num_dof_per_node;
@@ -239,7 +243,6 @@ fn main() {
         }
     }
 
-    stiffness
 
     // Jetzt die Ränder
     // Neumann Rand
