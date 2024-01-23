@@ -164,6 +164,7 @@ fn main() {
         let ref_element = &m.ref_elements[element.0];
         let num_element_nodes = element.1.nrows();
         let gauss = get_gauss_rule(2);
+        let nodal_coordinates = m.get_nodal_coordinates(element.1.as_slice());
 
         // Lokale Steifigkeitsmatrix
         let mut k = OMatrix::<f64, Dyn, Dyn>::zeros(
@@ -253,6 +254,9 @@ fn main() {
             for boundary_element_index in boundary_list {
                 let nodes = m.boundary_elements_local.column(*boundary_element_index);
                 let nodes = nodes.as_slice();
+
+                println!("{:?}", nodes);
+
                 for gauss in gauss_points.column_iter() {
                     let xi_1 = gauss[0];
                     let weight = gauss[1];
@@ -260,22 +264,27 @@ fn main() {
                         [0, 1] => {
                             // dt = d\xi, // \eta = -1
                             let coords = SVector::<f64, 2>::new(xi_1, -1.0);
-                            let shape_function = ref_element.get_shape_function_derivatives(coords);
-                            println!("{}", shape_function);
+
+                            let shape_function_deriv = ref_element.get_shape_function_derivatives(coords);
+                            println!("{}",shape_function_deriv);
+                            println!("{}",&nodal_coordinates);
+                            let differentials = &nodal_coordinates * shape_function_deriv;
+                            println!("{}", differentials);
+                            let shape_function = ref_element.get_shape_functions(coords);
+                            println!("{}",shape_function);
                         }
                         [1, 2] => { // dt = d\eta // \xi = 1
                         }
                         [2, 3] => { // dt = d\xi // \eta = 1
                             let coords = SVector::<f64, 2>::new(xi_1, 1.0);
-                            let shape_function = ref_element.get_shape_function_derivatives(coords);
-                            println!("{}", shape_function);
+                            let shape_function_deriv = ref_element.get_shape_function_derivatives(coords);
+                            //println!("{}", shape_function_deriv);
                         }
                         [3, 0] => { // dt = d\xi // \xi = -1
                         }
                         _ => {}
                     }
                 }
-                println!("{:?}", nodes);
             }
             //println!("{:?}",boundary_list)
         }
