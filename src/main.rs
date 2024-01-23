@@ -123,71 +123,115 @@ fn compute_sparsity_pattern<const DIM: usize>(
         }
     }
 
-    let mut csr = CsrMatrix::from(&coo);
+    let csr = CsrMatrix::from(&coo);
     return csr;
 }
 
-struct WeakForm {}
+struct Elasticity {
+    youngs_modulus: f64,
+    poissons_ratio: f64,
+}
 
-impl WeakForm {
+impl Elasticity {}
 
+impl WeakForm for Elasticity {
     fn num_dof_per_node(&self) -> usize {
         2
     }
 
-    fn stiffness_term(&self,shape_functions: &OMatrix<f64, Dyn, Const<2>>, shape_derivatives: &OMatrix<f64, Dyn, Const<2>>) -> OMatrix<f64,Dyn,Dyn> {
-        todo!()
+    fn stiffness_term(
+        &self,
+        virt_node: usize,
+        real_node: usize,
+        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OMatrix<f64, Dyn, Dyn> {
+        let b_mat_i = {
+            let mut result = SMatrix::<f64, 3, 2>::zeros();
+            result[(0, 0)] = shape_derivatives[(virt_node, 0)]; // N1x
+            result[(1, 1)] = shape_derivatives[(virt_node, 1)]; // N1y
+            result[(2, 0)] = shape_derivatives[(virt_node, 1)]; // N1y
+            result[(2, 1)] = shape_derivatives[(virt_node, 0)]; // N1x
+            result
+        };
+        let b_mat_j = {
+            let mut result = SMatrix::<f64, 3, 2>::zeros();
+            result[(0, 0)] = shape_derivatives[(real_node, 0)]; // N1x
+            result[(1, 1)] = shape_derivatives[(real_node, 1)]; // N1y
+            result[(2, 0)] = shape_derivatives[(real_node, 1)]; // N1y
+            result[(2, 1)] = shape_derivatives[(real_node, 0)]; // N1x
+            result
+        };
+
+        let result = b_mat_i.transpose() * b_mat_j;
+
+        let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);
+        for i in 0..(2 * 2) {
+            let i_k = i % 2;
+            let j_k = i / 2;
+
+            resulting[(i_k, j_k)] = result[(i_k, j_k)];
+        }
+        resulting
     }
 
-    fn right_hand_side_body(&self,shape_functions: &OMatrix<f64, Dyn, Const<2>>, shape_derivatives: &OMatrix<f64, Dyn, Const<2>>) -> OVector<f64,Dyn> {
-        todo!()
+    fn right_hand_side_body(
+        &self,
+        virt_node: usize,
+        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OVector<f64, Dyn> {
+        return OVector::<f64, Dyn>::zeros(2);
     }
+}
+
+// Diese gibt eine Dimension des Meshs vor, noch nicht implementiert.
+trait WeakForm {
+    fn num_dof_per_node(&self) -> usize;
+
+    fn stiffness_term(
+        &self,
+        virt_node: usize,
+        real_node: usize,
+        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OMatrix<f64, Dyn, Dyn>;
+
+    fn right_hand_side_body(
+        &self,
+        virt_node: usize,
+        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OVector<f64, Dyn>;
 }
 
 struct NeumannBoundary {}
 
-fn assemble_stiffness_matrix<const DIM: usize>(mesh: &FEMesh<DIM>, weakform: &WeakForm) {
+fn assemble_stiffness_matrix<W>(
+    mesh: &FEMesh<2>,
+    weakform: &W,
+    rhs: &mut OVector<f64, Dyn>,
+) -> CsrMatrix<f64>
+where
+    W: WeakForm,
+{
+    let num_dof_per_node = weakform.num_dof_per_node();
 
-}
+    let mut stiffness = compute_sparsity_pattern(&mesh, num_dof_per_node);
 
-fn main() {
-    let m = FEMesh::<DIM>::read_from_gmsh(
-        "test.msh4",
-        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
-        vec![Box::new(Quad4Element {})],
-    )
-    .unwrap();
-
-    // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
-    let num_dof_per_node = 2;
-
-    let num_dofs = num_dof_per_node * m.num_nodes();
-
-    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
-
-    let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
-
-    //let mut dense_stiffness = OMatrix::<f64,Dyn,Dyn>::zeros(num_dofs,num_dofs);
-    //for values in csr.triplet_iter() {
-    //    dense_stiffness[(values.0,values.1)] = 1.0;
-    //}
-    //println!("{}",dense_stiffness)
-
-    // Assemblierung der Steifigkeitsmatrix
-    // Jedes Element im Mesh
-    for element in m
+    for element in mesh
         .elements
         .column_iter()
         .enumerate()
-        .map(|f| (m.ref_element_index[f.0], f.1, f.0))
+        .map(|f| (mesh.ref_element_index[f.0], f.1, f.0))
     {
         //println!("{},{}", element.0, element.1);
 
         let current_element_index = element.2;
-        let ref_element = &m.ref_elements[element.0];
+        let ref_element = &mesh.ref_elements[element.0];
         let num_element_nodes = element.1.nrows();
         let gauss = get_gauss_rule(2);
-        let nodal_coordinates = m.get_nodal_coordinates(element.1.as_slice());
+        let nodal_coordinates = mesh.get_nodal_coordinates(element.1.as_slice());
 
         // Lokale Steifigkeitsmatrix
         let mut k = OMatrix::<f64, Dyn, Dyn>::zeros(
@@ -206,6 +250,7 @@ fn main() {
 
             //println!("{}",normal_func);
 
+            let shape_functions = ref_element.get_shape_functions(ref_coordinates);
             let derivatives = ref_element.get_shape_function_derivatives(ref_coordinates);
             let jacobian =
                 ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coordinates);
@@ -221,25 +266,33 @@ fn main() {
                 for i in element.1.row_iter().enumerate() {
                     let real_node_number = i.0;
 
+                    let result = weight
+                        * weakform.stiffness_term(
+                            virt_node_number,
+                            real_node_number,
+                            &shape_functions,
+                            &derivatives,
+                        )
+                        * determinant;
                     // mit den virtuellen Funktionen wird getestet!
-                    let B_mat_i = {
-                        let mut result = SMatrix::<f64, 3, 2>::zeros();
-                        result[(0, 0)] = derivatives[(virt_node_number, 0)]; // N1x
-                        result[(1, 1)] = derivatives[(virt_node_number, 1)]; // N1y
-                        result[(2, 0)] = derivatives[(virt_node_number, 1)]; // N1y
-                        result[(2, 1)] = derivatives[(virt_node_number, 0)]; // N1x
-                        result
-                    };
-                    let B_mat_j = {
-                        let mut result = SMatrix::<f64, 3, 2>::zeros();
-                        result[(0, 0)] = derivatives[(real_node_number, 0)]; // N1x
-                        result[(1, 1)] = derivatives[(real_node_number, 1)]; // N1y
-                        result[(2, 0)] = derivatives[(real_node_number, 1)]; // N1y
-                        result[(2, 1)] = derivatives[(real_node_number, 0)]; // N1x
-                        result
-                    };
+                    //let B_mat_i = {
+                    //    let mut result = SMatrix::<f64, 3, 2>::zeros();
+                    //    result[(0, 0)] = derivatives[(virt_node_number, 0)]; // N1x
+                    //    result[(1, 1)] = derivatives[(virt_node_number, 1)]; // N1y
+                    //    result[(2, 0)] = derivatives[(virt_node_number, 1)]; // N1y
+                    //    result[(2, 1)] = derivatives[(virt_node_number, 0)]; // N1x
+                    //    result
+                    //};
+                    //let B_mat_j = {
+                    //    let mut result = SMatrix::<f64, 3, 2>::zeros();
+                    //    result[(0, 0)] = derivatives[(real_node_number, 0)]; // N1x
+                    //    result[(1, 1)] = derivatives[(real_node_number, 1)]; // N1y
+                    //    result[(2, 0)] = derivatives[(real_node_number, 1)]; // N1y
+                    //    result[(2, 1)] = derivatives[(real_node_number, 0)]; // N1x
+                    //    result
+                    //};
 
-                    let result = weight * B_mat_i.transpose() * B_mat_j * determinant;
+                    //let result = weight * B_mat_i.transpose() * B_mat_j * determinant;
                     // Offset
                     for i in 0..(num_dof_per_node * num_dof_per_node) {
                         let i_k = i % num_dof_per_node;
@@ -251,6 +304,10 @@ fn main() {
                         )] += result[(i_k, j_k)];
                     }
                 }
+
+                let rhs_term =
+                    weakform.right_hand_side_body(virt_node_number, &shape_functions, &derivatives);
+                for i in 0..num_dof_per_node {}
             }
         }
         //println!("{:3.3}", k);
@@ -258,50 +315,6 @@ fn main() {
         // Rechte Seite Vektor:
 
         // Wenn das Element tatsächlich einen Rand besitzt
-        if let Some(boundary_list) = m.element_boundary_map.get(&current_element_index) {
-            //
-            //
-            let gauss_points = get_1d_gauss_rule(2);
-            for boundary_element_index in boundary_list {
-                // Lokale Kantennummer und Orientierung
-                let edge_index_orientation =
-                    m.boundary_elements_local.column(*boundary_element_index);
-                let edge_index = edge_index_orientation[0];
-                let edge_orientation = edge_index_orientation[1];
-                // Globale Knotennummern (auch orientiert)
-                let global_edge_nodes = m.boundary_elements.column(*boundary_element_index);
-                // Lokale Knotennummern
-                let local_edge_nodes = ref_element.get_edge_nodes(edge_index, edge_orientation);
-
-                // Randintegralsache
-                for gauss in gauss_points.column_iter() {
-                    let xi_1 = gauss[0];
-                    let co = OVector::<f64, Dyn>::from(vec![xi_1]);
-                    let weight = gauss[1];
-                    
-                    // Was wäre denn das in Referenzcoordinaten?
-                    let ref_coords =
-                    ref_element.get_edge_coordinate(edge_index, edge_orientation, &co);
-                    
-                    let jacobian =
-                    ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coords);
-                    let differential = jacobian.column(0);
-                    let transformation_factor = differential.norm();
-                    
-                    // Welche Shape Functions sind aktiv?
-                    
-                    let shape_function = ref_element.get_shape_functions(ref_coords);
-                    // Hier bräucht ich dann die tatsächliche Randfunktion
-                    for i in 0..global_edge_nodes.len() {
-                        for j in 0..num_dof_per_node { // Neumannfunktion in Richtung f(0) und f(1)
-                            rhs[global_edge_nodes[i] * num_dof_per_node + j] += //func[j] * 
-                              weight * shape_function[local_edge_nodes[i]] * transformation_factor;
-                        }
-                    }
-                }
-            }
-            //println!("{:?}",boundary_list)
-        }
 
         // Einbauen in die Stiffness Matrix
         for node_i in 0..element.1.nrows() {
@@ -324,8 +337,102 @@ fn main() {
             }
         }
     }
+    return stiffness;
+}
 
-    println!("{}",rhs);
+fn assemble_rhs_vector<W>(mesh: &FEMesh<2>, weakform: &W, rhs: &mut OVector<f64, Dyn>)
+where
+    W: WeakForm,
+{
+    let num_dof_per_node = weakform.num_dof_per_node();
+    // Wenn das Element tatsächlich einen Rand besitzt
+    for (current_element_index, boundary_list) in mesh.element_boundary_map.iter() {
+        //
+        //
+        let ref_element = &mesh.ref_elements[mesh.ref_element_index[*current_element_index]];
+        let gauss_points = get_1d_gauss_rule(2);
+        let element_nodes = mesh.elements.column(*current_element_index);
+        let nodal_coordinates = mesh.get_nodal_coordinates(element_nodes.as_slice());
+
+        for boundary_element_index in boundary_list {
+            // Lokale Kantennummer und Orientierung
+            let edge_index_orientation =
+                mesh.boundary_elements_local.column(*boundary_element_index);
+            let edge_index = edge_index_orientation[0];
+            let edge_orientation = edge_index_orientation[1];
+
+            let boundary_marker = mesh.boundary_type[(*boundary_element_index,0)];
+            println!("{}",boundary_marker);
+            // Globale Knotennummern (auch orientiert)
+            let global_edge_nodes = mesh.boundary_elements.column(*boundary_element_index);
+            // Lokale Knotennummern
+            let local_edge_nodes = ref_element.get_edge_nodes(edge_index, edge_orientation);
+
+            // Randintegralsache
+            for gauss in gauss_points.column_iter() {
+                let xi_1 = gauss[0];
+                let co = OVector::<f64, Dyn>::from(vec![xi_1]);
+                let weight = gauss[1];
+
+                // Was wäre denn das in Referenzcoordinaten?
+                let ref_coords = ref_element.get_edge_coordinate(edge_index, edge_orientation, &co);
+
+                let jacobian = ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coords);
+                let differential = jacobian.column(0);
+                let transformation_factor = differential.norm();
+
+                // Welche Shape Functions sind aktiv?
+
+                let shape_function = ref_element.get_shape_functions(ref_coords);
+                // Hier bräucht ich dann die tatsächliche Randfunktion
+                for i in 0..global_edge_nodes.len() {
+                    for j in 0..num_dof_per_node {
+                        // Neumannfunktion in Richtung f(0) und f(1)
+                        let func = if j == 1 { -1.0 } else {0.0};
+                        rhs[global_edge_nodes[i] * num_dof_per_node + j] += //func[j] * 
+                          func * weight * shape_function[local_edge_nodes[i]] * transformation_factor;
+                    }
+                }
+            }
+        }
+        //println!("{:?}",boundary_list)
+    }
+}
+
+fn main() {
+    let m = FEMesh::<DIM>::read_from_gmsh(
+        "test.msh4",
+        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
+        vec![Box::new(Quad4Element {})],
+    )
+    .unwrap();
+
+    // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
+    
+    
+    let elast = Elasticity {
+        youngs_modulus: 1.0,
+        poissons_ratio: 0.2,
+    };
+    
+    let num_dof_per_node = elast.num_dof_per_node();
+    let num_dofs = num_dof_per_node * m.num_nodes();
+
+    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
+
+    let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
+
+    assemble_rhs_vector(&m, &elast, &mut rhs);
+
+    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs, num_dofs);
+    for values in stiffness.triplet_iter() {
+        dense_stiffness[(values.0, values.1)] = *values.2;
+    }
+    println!("{:3.3}", dense_stiffness);
+
+    println!("{}", rhs);
 
     // Jetzt die Ränder
     // Neumann Rand

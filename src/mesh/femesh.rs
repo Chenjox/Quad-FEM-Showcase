@@ -286,7 +286,7 @@ impl<const DIM: usize> FEMesh<DIM> {
             }
         }
 
-        //println!("{:?}", boundary_containing_elements);
+        println!("{}", boundary_element_type);
 
         let final_mesh = FEMesh {
             coordinates: coordinates,
