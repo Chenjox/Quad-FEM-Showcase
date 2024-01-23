@@ -127,6 +127,29 @@ fn compute_sparsity_pattern<const DIM: usize>(
     return csr;
 }
 
+struct WeakForm {}
+
+impl WeakForm {
+
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn stiffness_term(&self,shape_functions: &OMatrix<f64, Dyn, Const<2>>, shape_derivatives: &OMatrix<f64, Dyn, Const<2>>) -> OMatrix<f64,Dyn,Dyn> {
+        todo!()
+    }
+
+    fn right_hand_side_body(&self,shape_functions: &OMatrix<f64, Dyn, Const<2>>, shape_derivatives: &OMatrix<f64, Dyn, Const<2>>) -> OVector<f64,Dyn> {
+        todo!()
+    }
+}
+
+struct NeumannBoundary {}
+
+fn assemble_stiffness_matrix<const DIM: usize>(mesh: &FEMesh<DIM>, weakform: &WeakForm) {
+
+}
+
 fn main() {
     let m = FEMesh::<DIM>::read_from_gmsh(
         "test.msh4",
@@ -234,45 +257,46 @@ fn main() {
 
         // Rechte Seite Vektor:
 
+        // Wenn das Element tatsächlich einen Rand besitzt
         if let Some(boundary_list) = m.element_boundary_map.get(&current_element_index) {
+            //
+            //
             let gauss_points = get_1d_gauss_rule(2);
             for boundary_element_index in boundary_list {
-                let nodes = m.boundary_elements_local.column(*boundary_element_index);
-                let nodes = nodes.as_slice();
+                // Lokale Kantennummer und Orientierung
+                let edge_index_orientation =
+                    m.boundary_elements_local.column(*boundary_element_index);
+                let edge_index = edge_index_orientation[0];
+                let edge_orientation = edge_index_orientation[1];
+                // Globale Knotennummern (auch orientiert)
+                let global_edge_nodes = m.boundary_elements.column(*boundary_element_index);
+                // Lokale Knotennummern
+                let local_edge_nodes = ref_element.get_edge_nodes(edge_index, edge_orientation);
 
-                println!("{:?}", nodes);
-
+                // Randintegralsache
                 for gauss in gauss_points.column_iter() {
                     let xi_1 = gauss[0];
+                    let co = OVector::<f64, Dyn>::from(vec![xi_1]);
                     let weight = gauss[1];
-                    match nodes {
-                        [0, 1] => {
-                            // dt = d\xi, // \eta = -1
-                            let coords = SVector::<f64, 2>::new(xi_1, -1.0);
-
-                            let shape_function_deriv =
-                                ref_element.get_shape_function_derivatives(coords);
-                            println!("{}", shape_function_deriv);
-                            println!("{}", &nodal_coordinates);
-                            // Im ersten steht dx drin, im zweiten dy ausgedrückt mit dxi und deta
-                            let differentials = &nodal_coordinates * shape_function_deriv;
-                            let diffx = differentials.column(0);
-                            println!("{}", diffx.norm());
-                            let shape_function = ref_element.get_shape_functions(coords);
-                            println!("{}", shape_function);
+                    
+                    // Was wäre denn das in Referenzcoordinaten?
+                    let ref_coords =
+                    ref_element.get_edge_coordinate(edge_index, edge_orientation, &co);
+                    
+                    let jacobian =
+                    ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coords);
+                    let differential = jacobian.column(0);
+                    let transformation_factor = differential.norm();
+                    
+                    // Welche Shape Functions sind aktiv?
+                    
+                    let shape_function = ref_element.get_shape_functions(ref_coords);
+                    // Hier bräucht ich dann die tatsächliche Randfunktion
+                    for i in 0..global_edge_nodes.len() {
+                        for j in 0..num_dof_per_node { // Neumannfunktion in Richtung f(0) und f(1)
+                            rhs[global_edge_nodes[i] * num_dof_per_node + j] += //func[j] * 
+                              weight * shape_function[local_edge_nodes[i]] * transformation_factor;
                         }
-                        [1, 2] => { // dt = d\eta // \xi = 1
-                        }
-                        [2, 3] => {
-                            // dt = d\xi // \eta = 1
-                            let coords = SVector::<f64, 2>::new(xi_1, 1.0);
-                            let shape_function_deriv =
-                                ref_element.get_shape_function_derivatives(coords);
-                            //println!("{}", shape_function_deriv);
-                        }
-                        [3, 0] => { // dt = d\xi // \xi = -1
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -300,6 +324,8 @@ fn main() {
             }
         }
     }
+
+    println!("{}",rhs);
 
     // Jetzt die Ränder
     // Neumann Rand

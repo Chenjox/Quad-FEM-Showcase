@@ -28,8 +28,8 @@ pub struct FEMesh<const DIM: usize> {
     pub elements: OMatrix<usize, Dyn, Dyn>,     // All the elements
     pub boundary_type: OMatrix<usize, Const<2>, Dyn>, // the type of the reference element of this specific boundary, and its physical tag (multiple elements may or may not belong to the same boundary)
     pub boundary_elements: OMatrix<usize, Dyn, Dyn>,  // All the Boundaries (as Elements...)
-    pub boundary_elements_local: OMatrix<usize, Dyn, Dyn>, // All the Boundaries in local coordinates
-    pub element_boundary_map: HashMap<usize, Vec<usize>>,  // Maps Element in Domain to Rand
+    pub boundary_elements_local: OMatrix<usize, Const<2>, Dyn>, // All the Boundaries in local edge coordinates, the second row denotes the orientation
+    pub element_boundary_map: HashMap<usize, Vec<usize>>,       // Maps Element in Domain to Rand
 }
 
 fn find2(haystack: &[usize], needle: &[usize]) -> Option<usize> {
@@ -238,7 +238,7 @@ impl<const DIM: usize> FEMesh<DIM> {
         // Jetzt das Boundary Mapping
         let mut boundary_containing_elements = HashMap::<usize, Vec<usize>>::new();
         let shape = boundary_elements.shape();
-        let mut boundary_local_mapping = OMatrix::<usize, Dyn, Dyn>::zeros(shape.0, shape.1);
+        let mut boundary_local_mapping = OMatrix::<usize, Const<2>, Dyn>::zeros(shape.1);
 
         // Abbildung:
         for boundary_curve in boundary_elements.column_iter().enumerate() {
@@ -260,24 +260,33 @@ impl<const DIM: usize> FEMesh<DIM> {
                         boundary_containing_elements
                             .insert(element_index, vec![boundary_curve_index]);
                     };
-
                     //
-                    for i in 0..boundary_curve.nrows() {
-                        boundary_local_mapping[(i, boundary_curve_index)] = (index + i) % 4;
-                    }
+                    boundary_local_mapping[(0, boundary_curve_index)] = index % 4;
+
+                    //println!("{}",boundary_local_mapping);
                     //boundary_local_mapping.push((index,(index+1) % 4));
                     //
                     break;
                 };
                 slice.reverse(); // maybe the element is backwards?
                 if let Some(index) = find2(&slice, boundary_curve.as_slice()) {
-                    todo!("Backward Element detected!");
+                    if let Some(saved_boundaries_indezes) =
+                        boundary_containing_elements.get_mut(&element_index)
+                    {
+                        saved_boundaries_indezes.push(boundary_curve_index);
+                    } else {
+                        boundary_containing_elements
+                            .insert(element_index, vec![boundary_curve_index]);
+                    };
+                    //
+                    boundary_local_mapping[(0, boundary_curve_index)] = index % 4;
+                    boundary_local_mapping[(1, boundary_curve_index)] = 1;
                     break;
                 };
             }
         }
 
-        println!("{:?}", boundary_containing_elements);
+        //println!("{:?}", boundary_containing_elements);
 
         let final_mesh = FEMesh {
             coordinates: coordinates,
