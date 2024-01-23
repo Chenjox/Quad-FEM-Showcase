@@ -7,6 +7,17 @@ pub trait ReferenceElement<const DIM: usize> {
         &self,
         ref_coordinates: SVector<f64, DIM>,
     ) -> OMatrix<f64, Dyn, Const<DIM>>;
+
+    fn get_jacobian_determinant(
+        &self,
+        nodal_coordinates: &OMatrix<f64, Const<DIM>, Dyn>,
+        ref_coordinates: SVector<f64, DIM>,
+    ) -> SMatrix<f64, DIM, DIM> {
+        let derivatives = self.get_shape_function_derivatives(ref_coordinates);
+
+        let jacobian = nodal_coordinates * derivatives;
+        jacobian
+    }
 }
 
 #[derive(Debug)]
