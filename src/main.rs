@@ -13,7 +13,7 @@ use crate::mesh::{
 };
 use mshio::ElementType;
 use nalgebra::{coordinates, Const, Dim, Dyn, MatrixView2x1, OMatrix, OVector, SMatrix, SVector};
-use nalgebra_sparse::SparseEntryMut::NonZero;
+use nalgebra_sparse::{coo, SparseEntryMut::NonZero};
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use vtkio::{
     model::{
@@ -132,7 +132,24 @@ struct Elasticity {
     poissons_ratio: f64,
 }
 
-impl Elasticity {}
+impl Elasticity {
+    fn material_matrix(&self) -> SMatrix<f64, 3, 3> {
+        let first_lame = self.youngs_modulus * self.poissons_ratio
+            / ((1.0 + self.poissons_ratio) * (1.0 - 2.0 * self.poissons_ratio));
+        let second_lame = self.youngs_modulus / (2.0 * (1.0 + self.poissons_ratio));
+        return SMatrix::<f64, 3, 3>::new(
+            2.0 * second_lame + first_lame,
+            first_lame,
+            0.0,
+            first_lame,
+            2.0 * second_lame + first_lame,
+            0.0,
+            0.0,
+            0.0,
+            second_lame,
+        );
+    }
+}
 
 impl WeakForm for Elasticity {
     fn num_dof_per_node(&self) -> usize {
@@ -163,7 +180,7 @@ impl WeakForm for Elasticity {
             result
         };
 
-        let result = b_mat_i.transpose() * b_mat_j;
+        let result = b_mat_i.transpose() * self.material_matrix() * b_mat_j;
 
         let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);
         for i in 0..(2 * 2) {
@@ -177,9 +194,9 @@ impl WeakForm for Elasticity {
 
     fn right_hand_side_body(
         &self,
-        virt_node: usize,
-        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
-        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+        _virt_node: usize,
+        _shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        _shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
     ) -> OVector<f64, Dyn> {
         return OVector::<f64, Dyn>::zeros(2);
     }
@@ -204,8 +221,6 @@ trait WeakForm {
         shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
     ) -> OVector<f64, Dyn>;
 }
-
-struct NeumannBoundary {}
 
 fn assemble_stiffness_matrix<W>(
     mesh: &FEMesh<2>,
@@ -274,25 +289,6 @@ where
                             &derivatives,
                         )
                         * determinant;
-                    // mit den virtuellen Funktionen wird getestet!
-                    //let B_mat_i = {
-                    //    let mut result = SMatrix::<f64, 3, 2>::zeros();
-                    //    result[(0, 0)] = derivatives[(virt_node_number, 0)]; // N1x
-                    //    result[(1, 1)] = derivatives[(virt_node_number, 1)]; // N1y
-                    //    result[(2, 0)] = derivatives[(virt_node_number, 1)]; // N1y
-                    //    result[(2, 1)] = derivatives[(virt_node_number, 0)]; // N1x
-                    //    result
-                    //};
-                    //let B_mat_j = {
-                    //    let mut result = SMatrix::<f64, 3, 2>::zeros();
-                    //    result[(0, 0)] = derivatives[(real_node_number, 0)]; // N1x
-                    //    result[(1, 1)] = derivatives[(real_node_number, 1)]; // N1y
-                    //    result[(2, 0)] = derivatives[(real_node_number, 1)]; // N1y
-                    //    result[(2, 1)] = derivatives[(real_node_number, 0)]; // N1x
-                    //    result
-                    //};
-
-                    //let result = weight * B_mat_i.transpose() * B_mat_j * determinant;
                     // Offset
                     for i in 0..(num_dof_per_node * num_dof_per_node) {
                         let i_k = i % num_dof_per_node;
@@ -307,7 +303,9 @@ where
 
                 let rhs_term =
                     weakform.right_hand_side_body(virt_node_number, &shape_functions, &derivatives);
-                for i in 0..num_dof_per_node {}
+                for i in 0..num_dof_per_node {
+                    rhs[virt_node_number * num_dof_per_node + i] += rhs_term[i];
+                }
             }
         }
         //println!("{:3.3}", k);
@@ -340,11 +338,45 @@ where
     return stiffness;
 }
 
-fn assemble_rhs_vector<W>(mesh: &FEMesh<2>, weakform: &W, rhs: &mut OVector<f64, Dyn>)
+trait NeumannBoundaryTerm {
+    fn num_dof_per_node(&self) -> usize;
+
+    fn eval_function(
+        &self,
+        boundary_marker: usize,
+        current_global_coordinates: &SVector<f64, 2>,
+        outward_normal_vector: &SVector<f64, 2>,
+    ) -> OVector<f64, Dyn>;
+}
+
+struct ConstantTractionForces {
+    map: HashMap<usize, [f64; 2]>,
+}
+
+impl NeumannBoundaryTerm for ConstantTractionForces {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn eval_function(
+        &self,
+        boundary_marker: usize,
+        current_global_coordinates: &SVector<f64, 2>,
+        outward_normal_vector: &SVector<f64, 2>,
+    ) -> OVector<f64, Dyn> {
+        if let Some(component_slice) = self.map.get(&boundary_marker) {
+            return OVector::<f64, Dyn>::from_column_slice(component_slice);
+        } else {
+            return OVector::<f64, Dyn>::zeros(2);
+        }
+    }
+}
+
+fn assemble_rhs_vector<W>(mesh: &FEMesh<2>, boundary_term: &W, rhs: &mut OVector<f64, Dyn>)
 where
-    W: WeakForm,
+    W: NeumannBoundaryTerm,
 {
-    let num_dof_per_node = weakform.num_dof_per_node();
+    let num_dof_per_node = boundary_term.num_dof_per_node();
     // Wenn das Element tatsächlich einen Rand besitzt
     for (current_element_index, boundary_list) in mesh.element_boundary_map.iter() {
         //
@@ -361,8 +393,8 @@ where
             let edge_index = edge_index_orientation[0];
             let edge_orientation = edge_index_orientation[1];
 
-            let boundary_marker = mesh.boundary_type[(*boundary_element_index,0)];
-            println!("{}",boundary_marker);
+            let boundary_marker = mesh.boundary_type[(0, *boundary_element_index)];
+            println!("{}", boundary_marker);
             // Globale Knotennummern (auch orientiert)
             let global_edge_nodes = mesh.boundary_elements.column(*boundary_element_index);
             // Lokale Knotennummern
@@ -378,19 +410,27 @@ where
                 let ref_coords = ref_element.get_edge_coordinate(edge_index, edge_orientation, &co);
 
                 let jacobian = ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coords);
-                let differential = jacobian.column(0);
+                let differential = if edge_index % 2 == 0 {
+                    jacobian.column(0)
+                } else {
+                    jacobian.column(1)
+                };
                 let transformation_factor = differential.norm();
 
                 // Welche Shape Functions sind aktiv?
 
                 let shape_function = ref_element.get_shape_functions(ref_coords);
+                let coordinates = &nodal_coordinates * &shape_function;
+
+                let neumann_value =
+                    boundary_term.eval_function(boundary_marker, &coordinates, &coordinates);
                 // Hier bräucht ich dann die tatsächliche Randfunktion
                 for i in 0..global_edge_nodes.len() {
                     for j in 0..num_dof_per_node {
                         // Neumannfunktion in Richtung f(0) und f(1)
-                        let func = if j == 1 { -1.0 } else {0.0};
+
                         rhs[global_edge_nodes[i] * num_dof_per_node + j] += //func[j] * 
-                          func * weight * shape_function[local_edge_nodes[i]] * transformation_factor;
+                          neumann_value[i] * weight * &shape_function[local_edge_nodes[i]] * transformation_factor;
                     }
                 }
             }
@@ -408,13 +448,16 @@ fn main() {
     .unwrap();
 
     // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
-    
-    
+
     let elast = Elasticity {
         youngs_modulus: 1.0,
         poissons_ratio: 0.2,
     };
-    
+
+    let traction = ConstantTractionForces {
+        map: HashMap::from([(3, [0., -1.])]),
+    };
+
     let num_dof_per_node = elast.num_dof_per_node();
     let num_dofs = num_dof_per_node * m.num_nodes();
 
@@ -424,18 +467,114 @@ fn main() {
 
     let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
 
-    assemble_rhs_vector(&m, &elast, &mut rhs);
+    assemble_rhs_vector(&m, &traction, &mut rhs);
 
-    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs, num_dofs);
-    for values in stiffness.triplet_iter() {
+    // Dirichlet
+    let mut marked_dofs = HashMap::new();
+    for (node_index, coords) in m.coordinates.column_iter().enumerate() {
+        // Decision Rule
+        if coords[1] < 1e-10 {
+            if coords[0] < 1e-10 {
+                marked_dofs.insert(node_index, ([true, true], [0., 0.]));
+            } else {
+                marked_dofs.insert(node_index, ([false, true], [0., 0.]));
+            }
+        }
+    }
+
+    let mut dirichlet_vector = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    let mut constraint_marker = Vec::new();
+
+    let mut num_constrained = 0;
+    for (marked_node, (is_constrained, value)) in marked_dofs {
+        for i in 0..num_dof_per_node {
+            if is_constrained[i] {
+                dirichlet_vector[marked_node * num_dof_per_node + i] += value[i];
+                constraint_marker.push(marked_node * num_dof_per_node + i);
+                num_constrained += 1;
+            }
+        }
+    }
+
+    let splitting_correction = &stiffness * dirichlet_vector;
+
+    let rhs = rhs - splitting_correction;
+
+    let mut reduced_system_matrix =
+        CooMatrix::new(num_dofs - num_constrained, num_dofs - num_constrained);
+    let mut reduced_rhs = OVector::<f64, Dyn>::zeros(num_dofs - num_constrained);
+
+    println!("{:?}", constraint_marker);
+
+    for (row, column, value) in stiffness.triplet_iter() {
+        if !constraint_marker.contains(&row) || !constraint_marker.contains(&column) {
+            let offset_column: usize = constraint_marker
+                .iter()
+                .map(|f| if f < &column { 1 } else { 0 })
+                .sum();
+            let offset_row: usize = constraint_marker
+                .iter()
+                .map(|f| if f < &row { 1 } else { 0 })
+                .sum();
+            //println!("{}", column);
+            //println!("{},{}",column,offset_column);
+            //println!("{},{}",row,offset_row);
+            reduced_system_matrix.push(row - offset_row, column - offset_column, *value)
+        }
+    }
+    for i in 0..num_dofs {
+        if !constraint_marker.contains(&i) {
+            let offset: usize = constraint_marker
+                .iter()
+                .map(|f| if f < &i { 1 } else { 0 })
+                .sum();
+            reduced_rhs[i - offset] = rhs[i];
+        }
+    }
+
+    let reduced_stiffness = CsrMatrix::from(&reduced_system_matrix);
+
+    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs-num_constrained, num_dofs-num_constrained);
+    for values in reduced_stiffness.triplet_iter() {
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
+
     println!("{:3.3}", dense_stiffness);
+    println!("{}", reduced_rhs);
 
-    println!("{}", rhs);
+    // CG Verfahren
 
-    // Jetzt die Ränder
-    // Neumann Rand
+    let mut precon = reduced_stiffness.diagonal_as_csr();
+    precon.triplet_iter_mut().for_each(|f| *f.2 = 1.0 / (*f.2));
+
+    let mut start_vec = OVector::<f64,Dyn>::zeros(num_dofs-num_constrained);
+
+    println!("{},{}",reduced_stiffness.ncols(),reduced_rhs.nrows());
+    let mut residual = &reduced_rhs - (&reduced_stiffness * &start_vec);
+    let mut h0 = &precon * &residual;
+    let mut d0 = h0.clone();
+
+    loop {
+        let z0 = &reduced_stiffness * &d0;
+
+        let alpha = (&residual.transpose() * &h0)[0] / (&d0.transpose() * &z0)[0];
+
+        start_vec = &start_vec + alpha * &d0;
+        let new_residual = &residual - alpha * z0;
+        let h1 = &precon * &residual;
+
+        let beta = (&new_residual.transpose() * &h1)[0]/(&residual * &h0)[0];
+
+        d0 = &h1 + beta * d0;
+        residual = new_residual;
+        h0 = h1;
+
+        if residual.norm() < 1e-6 {
+            break;
+        }
+
+    }
 
     // Dirichlet Rand
     /*
