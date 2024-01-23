@@ -184,28 +184,13 @@ fn main() {
             //println!("{}",normal_func);
 
             let derivatives = ref_element.get_shape_function_derivatives(ref_coordinates);
-
-            //println!("{}",derivatives);
-
-            let mut jacobian = SMatrix::<f64, DIM, DIM>::zeros();
-            for (local_index, point_index) in element.1.iter().enumerate() {
-                let point_index = *point_index;
-                let coords = m.get_node_coordinates(point_index);
-
-                // Grandienten einer shape function in beide richtungen
-                let gradient = derivatives.row(local_index);
-                let loc_jacobian = coords * gradient;
-
-                jacobian = jacobian + loc_jacobian;
-            }
-            let jacobian = jacobian;
+            let jacobian =
+                ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coordinates);
             let inv_jacobian = jacobian.try_inverse().unwrap();
-
             let determinant =
                 jacobian[(0, 0)] * jacobian[(1, 1)] - jacobian[(0, 1)] * jacobian[(1, 0)];
 
             // Transformation auf tatsächliche Elemente
-            // println!("{}", jacobian);
             let derivatives = (inv_jacobian * derivatives.transpose()).transpose();
 
             for j in element.1.row_iter().enumerate() {
@@ -265,19 +250,24 @@ fn main() {
                             // dt = d\xi, // \eta = -1
                             let coords = SVector::<f64, 2>::new(xi_1, -1.0);
 
-                            let shape_function_deriv = ref_element.get_shape_function_derivatives(coords);
-                            println!("{}",shape_function_deriv);
-                            println!("{}",&nodal_coordinates);
+                            let shape_function_deriv =
+                                ref_element.get_shape_function_derivatives(coords);
+                            println!("{}", shape_function_deriv);
+                            println!("{}", &nodal_coordinates);
+                            // Im ersten steht dx drin, im zweiten dy ausgedrückt mit dxi und deta
                             let differentials = &nodal_coordinates * shape_function_deriv;
-                            println!("{}", differentials);
+                            let diffx = differentials.column(0);
+                            println!("{}", diffx.norm());
                             let shape_function = ref_element.get_shape_functions(coords);
-                            println!("{}",shape_function);
+                            println!("{}", shape_function);
                         }
                         [1, 2] => { // dt = d\eta // \xi = 1
                         }
-                        [2, 3] => { // dt = d\xi // \eta = 1
+                        [2, 3] => {
+                            // dt = d\xi // \eta = 1
                             let coords = SVector::<f64, 2>::new(xi_1, 1.0);
-                            let shape_function_deriv = ref_element.get_shape_function_derivatives(coords);
+                            let shape_function_deriv =
+                                ref_element.get_shape_function_derivatives(coords);
                             //println!("{}", shape_function_deriv);
                         }
                         [3, 0] => { // dt = d\xi // \xi = -1

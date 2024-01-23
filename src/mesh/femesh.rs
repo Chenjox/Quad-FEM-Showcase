@@ -59,21 +59,24 @@ impl<const DIM: usize> FEMesh<DIM> {
         return self.coordinates.column(node_index);
     }
 
-    pub fn get_nodal_coordinates(&self, node_index_vec: &[usize]) -> OMatrix<f64,Const<DIM>,Dyn> {
+    pub fn get_nodal_coordinates(&self, node_index_vec: &[usize]) -> OMatrix<f64, Const<DIM>, Dyn> {
         let num = node_index_vec.len();
-        let mut b = OMatrix::<f64,Const<DIM>,Dyn>::zeros(num);
+        let mut b = OMatrix::<f64, Const<DIM>, Dyn>::zeros(num);
         for i in 0..num {
-            b.set_column(i,&self.get_node_coordinates(node_index_vec[i]))
-        };
+            b.set_column(i, &self.get_node_coordinates(node_index_vec[i]))
+        }
         b
     }
 
-    pub fn get_nodal_coordinates_const_size<const NUM: usize>(&self, node_index_vec: OMatrix<usize,Dyn,Const<1>>) -> SMatrix<f64,DIM,NUM> {
-        let mut b = SMatrix::<f64,DIM,NUM>::zeros();
+    pub fn get_nodal_coordinates_const_size<const NUM: usize>(
+        &self,
+        node_index_vec: OMatrix<usize, Dyn, Const<1>>,
+    ) -> SMatrix<f64, DIM, NUM> {
+        let mut b = SMatrix::<f64, DIM, NUM>::zeros();
         //let num = node_index_vec.ncols();
         for i in 0..NUM {
-            b.set_column(i,&self.get_node_coordinates(node_index_vec[i]))
-        };
+            b.set_column(i, &self.get_node_coordinates(node_index_vec[i]))
+        }
         b
     }
 
