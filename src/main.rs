@@ -277,7 +277,7 @@ where
             //println!("{}",jacobian);
 
             // Transformation auf tatsächliche Elemente
-            let derivatives = (inv_jacobian * derivatives.transpose()).transpose();
+            let derivatives = derivatives * inv_jacobian;
 
             for j in element.1.row_iter().enumerate() {
                 let virt_node_number = j.0;
