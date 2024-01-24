@@ -181,7 +181,7 @@ impl WeakForm for Elasticity {
         };
         
         let result = b_mat_i.transpose() * self.material_matrix() * b_mat_j;
-        println!("{}",result);
+        //println!("{}",result);
 
         let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);
         for i in 0..(2 * 2) {
@@ -274,7 +274,7 @@ where
             let determinant =
                 jacobian[(0, 0)] * jacobian[(1, 1)] - jacobian[(0, 1)] * jacobian[(1, 0)];
 
-            println!("{}",jacobian);
+            //println!("{}",jacobian);
 
             // Transformation auf tatsächliche Elemente
             let derivatives = (inv_jacobian * derivatives.transpose()).transpose();
@@ -401,6 +401,7 @@ where
             // Lokale Knotennummern
             let local_edge_nodes = ref_element.get_edge_nodes(edge_index, edge_orientation);
 
+            //println!("{}",local_edge_nodes);
             // Randintegralsache
             for gauss in gauss_points.column_iter() {
                 let xi_1 = gauss[0];
@@ -431,7 +432,7 @@ where
                         // Neumannfunktion in Richtung f(0) und f(1)
 
                         rhs[global_edge_nodes[i] * num_dof_per_node + j] += //func[j] * 
-                          neumann_value[i] * weight * &shape_function[local_edge_nodes[i]] * transformation_factor;
+                          neumann_value[j] * weight * &shape_function[local_edge_nodes[i]] * transformation_factor;
                     }
                 }
             }
@@ -469,7 +470,8 @@ fn main() {
     let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
 
     assemble_rhs_vector(&m, &traction, &mut rhs);
-
+    
+    //println!("{}",rhs);
     // Dirichlet
     let mut marked_dofs = HashMap::new();
     for (node_index, coords) in m.coordinates.column_iter().enumerate() {
@@ -506,10 +508,14 @@ fn main() {
         CooMatrix::new(num_dofs - num_constrained, num_dofs - num_constrained);
     let mut reduced_rhs = OVector::<f64, Dyn>::zeros(num_dofs - num_constrained);
 
-    println!("{:?}", constraint_marker);
+    //println!("{:?}", constraint_marker);
+
+    //let mut dense_stiffness =
+    //OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs, num_dofs);
+
 
     for (row, column, value) in stiffness.triplet_iter() {
-        if !constraint_marker.contains(&row) || !constraint_marker.contains(&column) {
+        if !constraint_marker.contains(&row) && !constraint_marker.contains(&column) {
             let offset_column: usize = constraint_marker
                 .iter()
                 .map(|f| if f < &column { 1 } else { 0 })
@@ -520,10 +526,13 @@ fn main() {
                 .sum();
             //println!("{}", column);
             //println!("{},{}",column,offset_column);
-            //println!("{},{}",row,offset_row);
+            //dense_stiffness[(row,column)] = *value;
+            //println!("{},{},{}",row-offset_row,column-offset_column,*value);
             reduced_system_matrix.push(row - offset_row, column - offset_column, *value)
         }
     }
+
+    //println!("{:3.3}", dense_stiffness);
     for i in 0..num_dofs {
         if !constraint_marker.contains(&i) {
             let offset: usize = constraint_marker
@@ -542,8 +551,8 @@ fn main() {
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
 
-    //println!("{:3.3}", dense_stiffness);
-    //println!("{}", reduced_rhs);
+    println!("{:3.3}", dense_stiffness);
+    println!("{}", reduced_rhs);
 
     let b = dense_stiffness.full_piv_lu();
     let k = b.solve(&reduced_rhs).unwrap();
