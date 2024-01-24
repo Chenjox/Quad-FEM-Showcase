@@ -535,46 +535,50 @@ fn main() {
 
     let reduced_stiffness = CsrMatrix::from(&reduced_system_matrix);
 
-    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs-num_constrained, num_dofs-num_constrained);
+    let mut dense_stiffness =
+        OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs - num_constrained, num_dofs - num_constrained);
     for values in reduced_stiffness.triplet_iter() {
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
 
-    println!("{:3.3}", dense_stiffness);
-    println!("{}", reduced_rhs);
+    //println!("{:3.3}", dense_stiffness);
+    //println!("{}", reduced_rhs);
 
     // CG Verfahren
 
     let mut precon = reduced_stiffness.diagonal_as_csr();
     precon.triplet_iter_mut().for_each(|f| *f.2 = 1.0 / (*f.2));
 
-    let mut start_vec = OVector::<f64,Dyn>::zeros(num_dofs-num_constrained);
+    let mut start_vec = OVector::<f64, Dyn>::zeros(num_dofs - num_constrained);
 
-    println!("{},{}",reduced_stiffness.ncols(),reduced_rhs.nrows());
+    //println!("{},{}", reduced_stiffness.nrows(), reduced_rhs.nrows());
     let mut residual = &reduced_rhs - (&reduced_stiffness * &start_vec);
     let mut h0 = &precon * &residual;
     let mut d0 = h0.clone();
 
+    
     loop {
         let z0 = &reduced_stiffness * &d0;
-
-        let alpha = (&residual.transpose() * &h0)[0] / (&d0.transpose() * &z0)[0];
-
+        
+        let alpha = &residual.dot(&h0) / (&d0.dot(&z0));
+        
         start_vec = &start_vec + alpha * &d0;
         let new_residual = &residual - alpha * z0;
         let h1 = &precon * &residual;
-
-        let beta = (&new_residual.transpose() * &h1)[0]/(&residual * &h0)[0];
-
+        
+        let beta = (&new_residual.dot(&h1)) / &residual.dot(&h0);
+        
         d0 = &h1 + beta * d0;
         residual = new_residual;
         h0 = h1;
-
+        
+        println!("{}",residual.norm());
         if residual.norm() < 1e-6 {
             break;
         }
-
     }
+
+    println!("{}",start_vec);
 
     // Dirichlet Rand
     /*
