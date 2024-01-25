@@ -12,7 +12,7 @@ use crate::mesh::{
     femesh::FEMesh,
 };
 use mshio::ElementType;
-use nalgebra::{coordinates, Const, Dim, Dyn, MatrixView2x1, OMatrix, OVector, SMatrix, SVector};
+use nalgebra::{coordinates, Const, Dim, Dyn, Matrix, MatrixView2x1, OMatrix, OVector, SMatrix, SVector, Storage};
 use nalgebra_sparse::{coo, SparseEntryMut::NonZero};
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use vtkio::{
@@ -200,6 +200,128 @@ impl WeakForm for Elasticity {
         _shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
     ) -> OVector<f64, Dyn> {
         return OVector::<f64, Dyn>::zeros(2);
+    }
+}
+
+struct StressSmootherRHS {
+    youngs_modulus: f64,
+    poissons_ratio: f64,
+    solution_vec: OVector<f64, Dyn>,
+    num_nodes_solution: usize,
+    num_dofs_per_node: usize
+}
+
+struct StressSmootherStiffness {
+    youngs_modulus: f64,
+    poissons_ratio: f64,
+    solution_vec: OVector<f64, Dyn>,
+    num_nodes_solution: usize,
+    num_dofs_per_node: usize
+}
+
+impl StressSmootherRHS {
+    fn material_matrix(&self) -> SMatrix<f64, 3, 3> {
+        let first_lame = self.youngs_modulus * self.poissons_ratio
+            / ((1.0 + self.poissons_ratio) * (1.0 - 2.0 * self.poissons_ratio));
+        let second_lame = self.youngs_modulus / (2.0 * (1.0 + self.poissons_ratio));
+        return SMatrix::<f64, 3, 3>::new(
+            2.0 * second_lame + first_lame,
+            first_lame,
+            0.0,
+            first_lame,
+            2.0 * second_lame + first_lame,
+            0.0,
+            0.0,
+            0.0,
+            second_lame,
+        );
+    }
+}
+
+impl WeakForm for StressSmootherStiffness {
+    fn num_dof_per_node(&self) -> usize {
+        1 // sigma_x, sigma_y, sigma_xy
+    }
+
+    fn stiffness_term(
+        &self,
+        virt_node: usize,
+        real_node: usize,
+        shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OMatrix<f64, Dyn, Dyn> {
+    
+
+        let shape_1 = OVector::<f64,Dyn>::from_element(1,shape_functions[virt_node]);
+        let shape_2 = OVector::<f64,Dyn>::from_element(1,shape_functions[real_node]);
+
+        let result = shape_1 * shape_2.transpose();
+
+        return result;
+    }
+
+    fn right_hand_side_body(
+        &self,
+        _virt_node: usize,
+        _shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        _shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OVector<f64, Dyn> {
+        return OVector::<f64, Dyn>::zeros(1);
+    }
+}
+
+impl WeakForm for StressSmootherRHS {
+    fn num_dof_per_node(&self) -> usize {
+        3 // sigma_x, sigma_y, sigma_xy
+    }
+
+    fn stiffness_term(
+            &self,
+            virt_node: usize,
+            real_node: usize,
+            shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+            shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+        ) -> OMatrix<f64, Dyn, Dyn> {
+        
+
+        let shape_1 = OVector::<f64,Dyn>::from_element(3,shape_functions[virt_node]);
+        let shape_2 = OVector::<f64,Dyn>::from_element(3,shape_functions[real_node]);
+
+        let result = shape_1 * shape_2.transpose();
+
+        return result;
+    }
+
+    fn right_hand_side_body(
+            &self,
+            virt_node: usize,
+            shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+            shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+        ) -> OVector<f64, Dyn> {
+        
+            let mut residual = OVector::<f64, Dyn>::zeros(3);
+            let b_mat_j = { // alle knoten durchlaufen!
+                let mut result = SMatrix::<f64, 3, 2>::zeros();
+                result[(0, 0)] = shape_derivatives[(virt_node, 0)]; // N1x
+                result[(1, 1)] = shape_derivatives[(virt_node, 1)]; // N1y
+                result[(2, 0)] = shape_derivatives[(virt_node, 1)]; // N1y
+                result[(2, 1)] = shape_derivatives[(virt_node, 0)]; // N1x
+                result
+            };
+    
+            // get correct displacements
+            //println!("{}",virt_node);
+            let disp = self.solution_vec.rows(self.num_dofs_per_node * virt_node,2);
+
+            //println!("{},{:?}",virt_node,disp.as_slice());
+            let stress = shape_functions[virt_node] * self.material_matrix() * b_mat_j * disp;
+
+            //println!("{}",stress);
+            for j in 0..3 {
+                residual[j] = stress[j]
+            };
+
+            return residual;
     }
 }
 
@@ -441,48 +563,70 @@ where
     }
 }
 
-fn main() {
-    let m = FEMesh::<DIM>::read_from_gmsh(
-        "test.msh4",
-        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
-        vec![Box::new(Quad4Element {})],
-    )
-    .unwrap();
-
-    // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
-
-    let elast = Elasticity {
-        youngs_modulus: 1.0,
-        poissons_ratio: 0.0,
-    };
-
-    let traction = ConstantTractionForces {
-        map: HashMap::from([(3, [0., -1.])]),
-    };
-
-    let num_dof_per_node = elast.num_dof_per_node();
-    let num_dofs = num_dof_per_node * m.num_nodes();
-
-    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
-
-    //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
-
-    let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
-
-    assemble_rhs_vector(&m, &traction, &mut rhs);
+trait DirichletBoundary {
+    fn num_dof_per_node(&self) -> usize;
     
-    //println!("{}",rhs);
-    // Dirichlet
+    fn is_constrained(&self,node: usize, dof_num: usize, coords: SVector<f64,2>) -> bool;
+
+    fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64,2>) -> f64;
+
+}
+
+struct PointWiseDirichlet {}
+
+impl DirichletBoundary for PointWiseDirichlet {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn is_constrained(&self,node: usize, dof_num: usize, coords: SVector<f64,2>) -> bool {
+        //println!("{},{}",node,coords);
+        if coords[1] < 1e-10 && dof_num == 1 { // bei x==0 soll y festgehalten werden
+            println!("Constraining Node {} in Direction {}",node,dof_num);
+            return true;
+        }
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 { // bei x== 0 und y== 0 soll x auch festgehalten werden
+            println!("Constraining Node {} in Direction {}",node,dof_num);
+            return true;
+        }
+
+        false
+    }
+
+    fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64,2>) -> f64 {
+        if coords[0] < 1e-10 && dof_num == 1 { // bei x==0 soll y festgehalten werden
+            return 0.0;
+        }
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
+            return 0.0;
+        }
+        0.0
+    }
+}
+
+fn get_dirichlet_vector_and_map<D : DirichletBoundary>(mesh: &FEMesh<2>,dirichlet: &D) -> (usize,Vec<usize>, OVector<f64,Dyn>) {
+    let num_dof_per_node = dirichlet.num_dof_per_node();
+    let num_nodes = mesh.num_nodes();
+    let num_dofs = num_dof_per_node * mesh.num_nodes();
+    
     let mut marked_dofs = HashMap::new();
-    for (node_index, coords) in m.coordinates.column_iter().enumerate() {
+    for (node_index, coords) in mesh.coordinates.column_iter().enumerate() {
         // Decision Rule
-        if coords[1] < 1e-10 {
-            if coords[0] < 1e-10 {
-                marked_dofs.insert(node_index, ([true, true], [0., 0.]));
-            } else {
-                marked_dofs.insert(node_index, ([false, true], [0., 0.]));
+        let coords = SVector::<f64,2>::from(coords);
+        let mut is_constrained_slice = [false,false];
+        let mut is_value_slice = [0.0,0.0];
+        for j in 0..num_dof_per_node {
+            if dirichlet.is_constrained(node_index, j,coords) {
+                is_constrained_slice[j] = true;
+                is_value_slice[j] = dirichlet.get_constrained_value(node_index, num_dof_per_node, coords);
+                //if coords[0] < 1e-10 {
+                //    marked_dofs.insert(node_index, ([true, true], [1., 0.]));
+                //} else {
+                //    marked_dofs.insert(node_index, ([true, false], [1., 0.]));
+                //}
             }
         }
+        marked_dofs.insert(node_index,(is_constrained_slice, is_value_slice));
     }
 
     let mut dirichlet_vector = OVector::<f64, Dyn>::zeros(num_dofs);
@@ -499,8 +643,20 @@ fn main() {
             }
         }
     }
+    let dirichlet_vector = dirichlet_vector;
 
-    let splitting_correction = &stiffness * dirichlet_vector;
+    return (num_constrained,constraint_marker,dirichlet_vector);
+}
+
+fn incorporate_dirichlet_boundary<D : DirichletBoundary>(mesh: &FEMesh<2>,stiffness: &CsrMatrix<f64>, rhs: &OVector<f64,Dyn>, dirichlet: &D) -> (CsrMatrix<f64>,OVector<f64,Dyn>) {
+    
+    let num_dof_per_node = dirichlet.num_dof_per_node();
+    let num_nodes = mesh.num_nodes();
+    let num_dofs = num_dof_per_node * mesh.num_nodes();
+    
+    let (num_constrained,constraint_marker,dirichlet_vector) = get_dirichlet_vector_and_map(mesh, dirichlet);
+
+    let splitting_correction = stiffness * &dirichlet_vector;
 
     let rhs = rhs - splitting_correction;
 
@@ -545,8 +701,85 @@ fn main() {
 
     let reduced_stiffness = CsrMatrix::from(&reduced_system_matrix);
 
+    return (reduced_stiffness, reduced_rhs);
+}
+
+fn dirichlet_backsubstitution<D : DirichletBoundary>(mesh: &FEMesh<2>, solution: &OVector<f64,Dyn>, dirichlet: &D) -> OVector<f64,Dyn> {
+
+    let num_dof_per_node = dirichlet.num_dof_per_node();
+    let num_nodes = mesh.num_nodes();
+    let num_dofs = num_dof_per_node * mesh.num_nodes();
+
+    let (num_constrained,constraint_marker,dirichlet_vector) = get_dirichlet_vector_and_map(mesh, dirichlet);
+
+    let mut correct_rhs = OVector::<f64,Dyn>::zeros(num_dofs);
+
+    let mut offset_counter = 0;
+    for i in 0..num_nodes {
+        for j in 0..num_dof_per_node {
+            if constraint_marker.contains(&(i*num_dof_per_node + j)) {
+                correct_rhs[i*num_dof_per_node + j] = dirichlet_vector[i*num_dof_per_node + j];
+                offset_counter += 1;
+    
+            } else {
+                correct_rhs[i*num_dof_per_node+j] = solution[i*num_dof_per_node + j -offset_counter];
+            }
+        }
+        
+    }
+
+    return correct_rhs;
+}
+
+fn main() {
+    let m = FEMesh::<DIM>::read_from_gmsh(
+        "test.msh4",
+        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
+        vec![Box::new(Quad4Element {})],
+    )
+    .unwrap();
+
+    // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
+
+    let youngs = 1.0;
+    let poisson = 0.0;
+
+    let elast = Elasticity {
+        youngs_modulus: youngs,
+        poissons_ratio: poisson,
+    };
+
+    let traction = ConstantTractionForces {
+        map: HashMap::from([(3, [0., -1.])]),
+    };
+
+    let dirichlet = PointWiseDirichlet{};
+
+
+    let num_dof_per_node = elast.num_dof_per_node();
+    let num_nodes = m.num_nodes();
+    let num_dofs = num_dof_per_node * m.num_nodes();
+
+    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
+
+    println!("Setting up Stiffness Matrix");
+    let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
+
+
+    println!("Assembling Neumann Terms for RHS");
+    assemble_rhs_vector(&m, &traction, &mut rhs);
+    
+    println!("{}",rhs);
+    // Dirichlet
+
+    println!("Incorporating Dirichlet Terms");
+    let (reduced_stiffness,reduced_rhs) = incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
+    
+    let num_free_dofs = reduced_stiffness.ncols();
     let mut dense_stiffness =
-        OMatrix::<f64, Dyn, Dyn>::zeros(num_dofs - num_constrained, num_dofs - num_constrained);
+        OMatrix::<f64, Dyn, Dyn>::zeros(num_free_dofs,num_free_dofs);
     for values in reduced_stiffness.triplet_iter() {
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
@@ -554,27 +787,70 @@ fn main() {
     println!("{:3.3}", dense_stiffness);
     println!("{}", reduced_rhs);
 
+
+    println!("Solving System");
+
     let b = dense_stiffness.full_piv_lu();
     let k = b.solve(&reduced_rhs).unwrap();
 
     println!("{}",k);
 
     // jetzt die Rückwärtsrolle
-    let mut correct_rhs = OVector::<f64,Dyn>::zeros(num_dofs);
+    let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
 
-    let mut offset_counter = 0;
-    for i in 0..num_dofs {
-        if constraint_marker.contains(&i) {
-            correct_rhs[i] = 0.0;
-            offset_counter += 1;
+    // Postprocessing
+    let stress_smoother = StressSmootherRHS {
+        youngs_modulus: youngs,
+        poissons_ratio: poisson,
+        solution_vec: correct_rhs.clone(),
+        num_nodes_solution: num_nodes,
+        num_dofs_per_node: 2
+    };
 
-        } else {
-            correct_rhs[i] = k[i-offset_counter];
-        }
+    println!("Smothing Stresses");
+
+    let mut stress_rhs = OVector::<f64, Dyn>::zeros(stress_smoother.num_dof_per_node()*m.num_nodes());
+
+    let _stressness = assemble_stiffness_matrix(&m, &stress_smoother, &mut stress_rhs);
+
+    let stress_smoother_stiffness = StressSmootherStiffness {
+        youngs_modulus: youngs,
+        poissons_ratio: poisson,
+        solution_vec: correct_rhs.clone(),
+        num_nodes_solution: num_nodes,
+        num_dofs_per_node: 2
+    };
+
+    let mut dummy_stress_rhs = OVector::<f64, Dyn>::zeros(m.num_nodes());
+
+    let stressness = assemble_stiffness_matrix(&m, &stress_smoother_stiffness, &mut dummy_stress_rhs);
+
+    let mut dense_stressness =
+        OMatrix::<f64, Dyn, Dyn>::zeros(stressness.nrows(),stressness.ncols());
+    for values in stressness.triplet_iter() {
+        dense_stressness[(values.0, values.1)] = *values.2;
     }
 
+    println!("{:3.3}", dense_stressness);
+    println!("{:3.3}", stress_rhs);
 
-    write_vkt_from_mesh(m, correct_rhs)
+    let chol_stress = dense_stressness.cholesky().unwrap();
+
+    let mut stress_solution = OVector::<f64,Dyn>::zeros(stress_rhs.nrows());
+
+    for i in 0..3 {
+        let stress_component_rhs = stress_rhs.rows_with_step(i, stressness.nrows(),2);
+        let solution = chol_stress.solve(&stress_component_rhs);
+        for j in 0..solution.nrows() {
+            stress_solution[j*3+i] = solution[j]
+        }
+        println!("{}",solution);
+        println!("{}",stress_solution);
+    }
+
+    
+
+    write_vkt_from_mesh(m, correct_rhs, stress_solution);
 
     // CG Verfahren
 
@@ -624,7 +900,7 @@ fn main() {
 }
 
 
-fn write_vkt_from_mesh(mesh: FEMesh<2>, solution: OMatrix<f64,Dyn,Const<1>>) {
+fn write_vkt_from_mesh(mesh: FEMesh<2>, solution: OMatrix<f64,Dyn,Const<1>>, stress_solution: OMatrix<f64,Dyn,Const<1>>) {
 
     let path = PathBuf::from(r"\test\test.vtu");
 
@@ -653,20 +929,33 @@ fn write_vkt_from_mesh(mesh: FEMesh<2>, solution: OMatrix<f64,Dyn,Const<1>>) {
             result_vector.push(0.0)
         }
     }
+    let mut stress_vector = Vec::new();
+    for (index,result) in stress_solution.row_iter().enumerate() {
+        stress_vector.push(result[0]);
+    }
 
     println!("{:?}",result_vector);
 
-    let sols = Attribute::DataArray(
+    let sols = 
+    vec![Attribute::DataArray(
         DataArray {
             name: String::from("Displacement"),
             elem: vtkio::model::ElementType::Vectors,
             data: vtkio::IOBuffer::F64(result_vector)
         }
-    );
+    ), 
+        Attribute::DataArray(
+            DataArray {
+                name: String::from("Stresses"),
+                elem: vtkio::model::ElementType::Generic(3),
+                data: vtkio::IOBuffer::F64(stress_vector)
+            }
+        )
+    ];
 
     let vt = Vtk {
         version: Version::new((0, 1)),
-        title: String::from("Heatmap"),
+        title: String::from("Displacements"),
         file_path: Some(path),
         byte_order: vtkio::model::ByteOrder::LittleEndian,
         data: DataSet::inline(
@@ -682,7 +971,7 @@ fn write_vkt_from_mesh(mesh: FEMesh<2>, solution: OMatrix<f64,Dyn,Const<1>>) {
                     ].into_iter().flatten().collect::<Vec<CellType>>()
                 },
                 data: Attributes {
-                    point: vec![sols],
+                    point: sols,
                     cell: vec![]
                 }
             }
