@@ -320,12 +320,12 @@ impl WeakForm for StressSmootherRHS {
                 .solution_vec
                 .rows(self.num_dofs_per_node * element_nodes[i], 2);
             let stress = shape_functions[virt_node] * self.material_matrix() * b_mat_j * disp;
-            
+
             for j in 0..3 {
                 residual[j] += stress[j]
             }
         }
-        println!("Residual for Node {}, {:?}",virt_node,residual.as_slice());
+        println!("Residual for Node {}, {:?}", virt_node, residual.as_slice());
         // get correct displacements
         //println!("{}",virt_node);
 
@@ -391,9 +391,7 @@ where
             num_dof_per_node * num_element_nodes,
         );
 
-        let mut rhs_local = OVector::<f64,Dyn>::zeros(
-            num_dof_per_node * num_element_nodes
-        );
+        let mut rhs_local = OVector::<f64, Dyn>::zeros(num_dof_per_node * num_element_nodes);
 
         for gauss_point in gauss.column_iter() {
             let xi_1 = gauss_point[0];
@@ -452,7 +450,8 @@ where
                     &derivatives,
                 );
                 for i in 0..num_dof_per_node {
-                    rhs_local[virt_node_number * num_dof_per_node + i] += weight * rhs_term[i] * determinant;
+                    rhs_local[virt_node_number * num_dof_per_node + i] +=
+                        weight * rhs_term[i] * determinant;
                 }
             }
         }
@@ -597,15 +596,23 @@ trait DirichletBoundary {
     fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64;
 }
 
-struct PointWiseDirichlet {}
+struct YZeroDirichlet {}
 
-impl DirichletBoundary for PointWiseDirichlet {
+struct XZeroDirichlet {}
+struct ConditionRule {
+    coordinate_criterion: SVector<f64, 2>,
+    dirichlet_value: SVector<f64, 2>,
+    active_direction: SVector<bool, 2>,
+    smaller_than: bool,
+}
+
+impl DirichletBoundary for YZeroDirichlet {
     fn num_dof_per_node(&self) -> usize {
         2
     }
 
     fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
-        //println!("{},{}",node,coords);
+        // ist y 0, dann wird y-richtung festgehalten
         if coords[1] < 1e-10 && dof_num == 1 {
             // bei x==0 soll y festgehalten werden
             println!("Constraining Node {} in Direction {}", node, dof_num);
@@ -632,37 +639,73 @@ impl DirichletBoundary for PointWiseDirichlet {
     }
 }
 
+impl DirichletBoundary for XZeroDirichlet {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
+        //println!("{},{}",node,coords);
+        if coords[1] < 1e-10 && dof_num == 1 {
+            // bei x==0 soll x festgehalten werden
+            println!("Constraining Node {} in Direction {}", node, dof_num);
+            return true;
+        }
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
+            // bei x== 0 und y== 0 soll x auch festgehalten werden
+            println!("Constraining Node {} in Direction {}", node, dof_num);
+            return true;
+        }
+
+        false
+    }
+
+    fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
+        if coords[0] < 1e-10 && dof_num == 1 {
+            // bei x==0 soll y festgehalten werden
+            return 0.0;
+        }
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
+            return 0.0;
+        }
+        0.0
+    }
+}
+
 fn get_dirichlet_vector_and_map<D: DirichletBoundary>(
     mesh: &FEMesh<2>,
-    dirichlet: &D,
-) -> (usize, Vec<usize>, OVector<f64, Dyn>) {
-    let num_dof_per_node = dirichlet.num_dof_per_node();
+    dirichlet: &Vec<D>,
+) -> (usize, Vec<usize>, OVector<f64, Dyn>)
+where
+    D: DirichletBoundary + Sized,
+{
+    let mut marked_dofs = HashMap::new();
+    let num_dof_per_node = dirichlet[0].num_dof_per_node();
     let num_nodes = mesh.num_nodes();
     let num_dofs = num_dof_per_node * mesh.num_nodes();
 
-    let mut marked_dofs = HashMap::new();
-    for (node_index, coords) in mesh.coordinates.column_iter().enumerate() {
-        // Decision Rule
-        let coords = SVector::<f64, 2>::from(coords);
-        let mut is_constrained_slice = [false, false];
-        let mut is_value_slice = [0.0, 0.0];
-        for j in 0..num_dof_per_node {
-            if dirichlet.is_constrained(node_index, j, coords) {
-                is_constrained_slice[j] = true;
-                is_value_slice[j] =
-                    dirichlet.get_constrained_value(node_index, num_dof_per_node, coords);
-                //if coords[0] < 1e-10 {
-                //    marked_dofs.insert(node_index, ([true, true], [1., 0.]));
-                //} else {
-                //    marked_dofs.insert(node_index, ([true, false], [1., 0.]));
-                //}
+    for dirichlet in dirichlet {
+        for (node_index, coords) in mesh.coordinates.column_iter().enumerate() {
+            // Decision Rule
+            let coords = SVector::<f64, 2>::from(coords);
+            let mut is_constrained_slice = [false, false];
+            let mut is_value_slice = [0.0, 0.0];
+            for j in 0..num_dof_per_node {
+                if dirichlet.is_constrained(node_index, j, coords) {
+                    is_constrained_slice[j] = true;
+                    is_value_slice[j] =
+                        dirichlet.get_constrained_value(node_index, num_dof_per_node, coords);
+                    //if coords[0] < 1e-10 {
+                    //    marked_dofs.insert(node_index, ([true, true], [1., 0.]));
+                    //} else {
+                    //    marked_dofs.insert(node_index, ([true, false], [1., 0.]));
+                    //}
+                }
             }
+            marked_dofs.insert(node_index, (is_constrained_slice, is_value_slice));
         }
-        marked_dofs.insert(node_index, (is_constrained_slice, is_value_slice));
     }
-
     let mut dirichlet_vector = OVector::<f64, Dyn>::zeros(num_dofs);
-
     let mut constraint_marker = Vec::new();
 
     let mut num_constrained = 0;
@@ -675,18 +718,19 @@ fn get_dirichlet_vector_and_map<D: DirichletBoundary>(
             }
         }
     }
+
     let dirichlet_vector = dirichlet_vector;
 
     return (num_constrained, constraint_marker, dirichlet_vector);
 }
 
-fn incorporate_dirichlet_boundary<D: DirichletBoundary>(
+fn incorporate_dirichlet_boundary<D: DirichletBoundary + Sized>(
     mesh: &FEMesh<2>,
     stiffness: &CsrMatrix<f64>,
     rhs: &OVector<f64, Dyn>,
-    dirichlet: &D,
+    dirichlet: &Vec<D>,
 ) -> (CsrMatrix<f64>, OVector<f64, Dyn>) {
-    let num_dof_per_node = dirichlet.num_dof_per_node();
+    let num_dof_per_node = dirichlet[0].num_dof_per_node();
     let num_nodes = mesh.num_nodes();
     let num_dofs = num_dof_per_node * mesh.num_nodes();
 
@@ -740,12 +784,12 @@ fn incorporate_dirichlet_boundary<D: DirichletBoundary>(
     return (reduced_stiffness, reduced_rhs);
 }
 
-fn dirichlet_backsubstitution<D: DirichletBoundary>(
+fn dirichlet_backsubstitution<D: DirichletBoundary + Sized>(
     mesh: &FEMesh<2>,
     solution: &OVector<f64, Dyn>,
-    dirichlet: &D,
+    dirichlet: &Vec<D>,
 ) -> OVector<f64, Dyn> {
-    let num_dof_per_node = dirichlet.num_dof_per_node();
+    let num_dof_per_node = dirichlet[0].num_dof_per_node();
     let num_nodes = mesh.num_nodes();
     let num_dofs = num_dof_per_node * mesh.num_nodes();
 
@@ -792,7 +836,7 @@ fn main() {
         map: HashMap::from([(3, [0., -1.])]),
     };
 
-    let dirichlet = PointWiseDirichlet {};
+    let dirichlet = vec![YZeroDirichlet {}];
 
     let num_dof_per_node = elast.num_dof_per_node();
     let num_nodes = m.num_nodes();
