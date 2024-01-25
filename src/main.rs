@@ -286,7 +286,7 @@ impl WeakForm for StressSmootherRHS {
         real_node: usize,
         _element_nodes: &[usize],
         shape_functions: &OMatrix<f64, Dyn, Const<1>>,
-        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+        _shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
     ) -> OMatrix<f64, Dyn, Dyn> {
         let shape_1 = OVector::<f64, Dyn>::from_element(3, shape_functions[virt_node]);
         let shape_2 = OVector::<f64, Dyn>::from_element(3, shape_functions[real_node]);
@@ -320,11 +320,12 @@ impl WeakForm for StressSmootherRHS {
                 .solution_vec
                 .rows(self.num_dofs_per_node * element_nodes[i], 2);
             let stress = shape_functions[virt_node] * self.material_matrix() * b_mat_j * disp;
-
+            
             for j in 0..3 {
-                residual[j] = stress[j]
+                residual[j] += stress[j]
             }
         }
+        println!("Residual for Node {}, {:?}",virt_node,residual.as_slice());
         // get correct displacements
         //println!("{}",virt_node);
 
@@ -390,6 +391,10 @@ where
             num_dof_per_node * num_element_nodes,
         );
 
+        let mut rhs_local = OVector::<f64,Dyn>::zeros(
+            num_dof_per_node * num_element_nodes
+        );
+
         for gauss_point in gauss.column_iter() {
             let xi_1 = gauss_point[0];
             let xi_2 = gauss_point[1];
@@ -447,7 +452,7 @@ where
                     &derivatives,
                 );
                 for i in 0..num_dof_per_node {
-                    rhs[virt_node_number * num_dof_per_node + i] += rhs_term[i];
+                    rhs_local[virt_node_number * num_dof_per_node + i] += weight * rhs_term[i] * determinant;
                 }
             }
         }
@@ -457,8 +462,8 @@ where
 
         // Einbauen in die Stiffness Matrix
         for node_i in 0..element.1.nrows() {
+            let pos_i = element.1[node_i] * num_dof_per_node;
             for node_j in 0..element.1.nrows() {
-                let pos_i = element.1[node_i] * num_dof_per_node;
                 let pos_j = element.1[node_j] * num_dof_per_node;
 
                 for i in 0..(num_dof_per_node * num_dof_per_node) {
@@ -473,6 +478,9 @@ where
                         )];
                     };
                 }
+            }
+            for i in 0..num_dof_per_node {
+                rhs[pos_i + i] += rhs_local[node_i * num_dof_per_node + i];
             }
         }
     }
