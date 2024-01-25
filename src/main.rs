@@ -772,7 +772,7 @@ fn dirichlet_backsubstitution<D: DirichletBoundary>(
 
 fn main() {
     let m = FEMesh::<DIM>::read_from_gmsh(
-        "meshStraigthQuad.msh4",
+        "test.msh4",
         HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
         vec![Box::new(Quad4Element {})],
     )
