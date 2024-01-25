@@ -16,7 +16,7 @@ use nalgebra::{
     coordinates, Const, Dim, Dyn, Matrix, MatrixView2x1, OMatrix, OVector, SMatrix, SVector,
     Storage,
 };
-use nalgebra_sparse::{coo, SparseEntryMut::NonZero};
+use nalgebra_sparse::{coo, factorization::CscCholesky, SparseEntryMut::NonZero};
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use vtkio::{
     model::{
@@ -325,7 +325,7 @@ impl WeakForm for StressSmootherRHS {
                 residual[j] += stress[j]
             }
         }
-        println!("Residual for Node {}, {:?}", virt_node, residual.as_slice());
+        //println!("Residual for Node {}, {:?}", virt_node, residual.as_slice());
         // get correct displacements
         //println!("{}",virt_node);
 
@@ -596,9 +596,13 @@ trait DirichletBoundary {
     fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64;
 }
 
-struct YZeroDirichlet {}
+struct YValueDirichlet {
+    y_value: f64
+}
 
-struct XZeroDirichlet {}
+struct XValueDirichlet {
+    x_value: f64
+}
 struct ConditionRule {
     coordinate_criterion: SVector<f64, 2>,
     dirichlet_value: SVector<f64, 2>,
@@ -606,7 +610,7 @@ struct ConditionRule {
     smaller_than: bool,
 }
 
-impl DirichletBoundary for YZeroDirichlet {
+impl DirichletBoundary for YValueDirichlet {
     fn num_dof_per_node(&self) -> usize {
         2
     }
@@ -615,12 +619,12 @@ impl DirichletBoundary for YZeroDirichlet {
         // ist y 0, dann wird y-richtung festgehalten
         if coords[1] < 1e-10 && dof_num == 1 {
             // bei x==0 soll y festgehalten werden
-            println!("Constraining Node {} in Direction {}", node, dof_num);
+            //println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
         if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
             // bei x== 0 und y== 0 soll x auch festgehalten werden
-            println!("Constraining Node {} in Direction {}", node, dof_num);
+            //println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
 
@@ -630,7 +634,7 @@ impl DirichletBoundary for YZeroDirichlet {
     fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
         if coords[0] < 1e-10 && dof_num == 1 {
             // bei x==0 soll y festgehalten werden
-            return 0.0;
+            return self.y_value;
         }
         if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
             return 0.0;
@@ -639,20 +643,20 @@ impl DirichletBoundary for YZeroDirichlet {
     }
 }
 
-impl DirichletBoundary for XZeroDirichlet {
+impl DirichletBoundary for XValueDirichlet {
     fn num_dof_per_node(&self) -> usize {
         2
     }
 
     fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
         //println!("{},{}",node,coords);
-        if coords[1] < 1e-10 && dof_num == 1 {
-            // bei x==0 soll x festgehalten werden
+        if coords[0] < 1e-10 && dof_num == 0 {
+            // bei y==0 soll x festgehalten werden
             println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
-        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
-            // bei x== 0 und y== 0 soll x auch festgehalten werden
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 1 {
+            // bei x== 0 und y== 0 soll y auch festgehalten werden
             println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
@@ -661,11 +665,11 @@ impl DirichletBoundary for XZeroDirichlet {
     }
 
     fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
-        if coords[0] < 1e-10 && dof_num == 1 {
-            // bei x==0 soll y festgehalten werden
-            return 0.0;
+        if coords[0] < 1e-10 && dof_num == 0 {
+            // bei x==0 soll x festgehalten werden
+            return self.x_value;
         }
-        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
+        if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 1 {
             return 0.0;
         }
         0.0
@@ -815,28 +819,64 @@ fn dirichlet_backsubstitution<D: DirichletBoundary + Sized>(
 }
 
 fn main() {
+    
+    run_patch_test_for_file(&"test", 10.0, 0.2)
+}
+
+fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
     let m = FEMesh::<DIM>::read_from_gmsh(
-        "test.msh4",
+        &format!("{}.msh4",file_name),
         HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
         vec![Box::new(Quad4Element {})],
     )
     .unwrap();
+    let traction = ConstantTractionForces {
+        map: HashMap::from([(3, [0., -1.])]),
+    };
+
+    let dirichlet = vec![YValueDirichlet { y_value: 0.0}];
+
+    patch_test_run(&format!("{}-Y-Loading",file_name), &m, youngs, poisson, &dirichlet, traction);
+
+    let traction = ConstantTractionForces {
+        map: HashMap::from([(2, [1., 0.])]),
+    };
+
+    let dirichlet = vec![XValueDirichlet { x_value: 0.0}];
+
+    patch_test_run(&format!("{}-X-Loading",file_name), &m, youngs, poisson, &dirichlet, traction);
+
+    let traction = ConstantTractionForces {
+        map: HashMap::new(),
+    };
+
+    let dirichlet = vec![XValueDirichlet { x_value: 1.0}];
+
+    patch_test_run(&format!("{}-X-Disp",file_name), &m, youngs, poisson, &dirichlet, traction);
+
+    let traction = ConstantTractionForces {
+        map: HashMap::new(),
+    };
+
+    let dirichlet = vec![YValueDirichlet { y_value: 1.0}];
+
+    patch_test_run(&format!("{}-Y-Disp",file_name), &m, youngs, poisson, &dirichlet, traction);
+}
+
+fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &str, mesh: &FEMesh<2>, youngs: f64, poisson: f64, dirichlet: &Vec<D>, neumann: N){
+    let m = mesh;
 
     // Wenn ich 2 DOF pro Knoten habe, besitzt jeder Knoten eine untersteifigkeit von num_dof_per_node x num_dof_per_node größe
-
-    let youngs = 1.0;
-    let poisson = 0.1;
 
     let elast = Elasticity {
         youngs_modulus: youngs,
         poissons_ratio: poisson,
     };
 
-    let traction = ConstantTractionForces {
-        map: HashMap::from([(3, [0., -1.])]),
-    };
+    // Am Rand 3 
+    let traction = neumann;
 
-    let dirichlet = vec![YZeroDirichlet {}];
+    let dirichlet = dirichlet;
 
     let num_dof_per_node = elast.num_dof_per_node();
     let num_nodes = m.num_nodes();
@@ -865,15 +905,21 @@ fn main() {
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
 
-    println!("{:3.3}", dense_stiffness);
-    println!("{}", reduced_rhs);
-
     println!("Solving System");
 
-    let b = dense_stiffness.full_piv_lu();
-    let k = b.solve(&reduced_rhs).unwrap();
+    let reduced_stiffness = reduced_stiffness.transpose_as_csc();
 
-    println!("{}", k);
+    let choles = CscCholesky::factor(&reduced_stiffness).unwrap();
+
+    let sol_k = choles.solve(&reduced_rhs);
+
+
+    let mut k  = OMatrix::<f64, Dyn, Const<1>>::zeros(sol_k.nrows());
+    for i in 0..sol_k.nrows() {
+        k[i] = sol_k[i]
+    }
+
+    println!("{}",k);
 
     // jetzt die Rückwärtsrolle
     let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
@@ -930,57 +976,12 @@ fn main() {
         println!("{}", stress_solution);
     }
 
-    write_vkt_from_mesh(m, correct_rhs, stress_solution);
-
-    // CG Verfahren
-
-    /*
-
-    let mut precon = reduced_stiffness.diagonal_as_csr();
-    precon.triplet_iter_mut().for_each(|f| *f.2 = 1.0 / (*f.2));
-
-    let mut start_vec = OVector::<f64, Dyn>::zeros(num_dofs - num_constrained);
-
-    //println!("{},{}", reduced_stiffness.nrows(), reduced_rhs.nrows());
-    let mut residual = &reduced_rhs - (&reduced_stiffness * &start_vec);
-    let mut h0 = &precon * &residual;
-    let mut d0 = h0.clone();
-
-
-    loop {
-        let z0 = &reduced_stiffness * &d0;
-
-        let alpha = &residual.dot(&h0) / (&d0.dot(&z0));
-
-        start_vec = &start_vec + alpha * &d0;
-        let new_residual = &residual - alpha * z0;
-        let h1 = &precon * &residual;
-
-        let beta = (&new_residual.dot(&h1)) / &residual.dot(&h0);
-
-        d0 = &h1 + beta * d0;
-        residual = new_residual;
-        h0 = h1;
-
-        println!("{}",residual.norm());
-        if residual.norm() < 1e-6 {
-            break;
-        }
-    }
-    */
-
-    // Dirichlet Rand
-    /*
-    let mut dense_stiffness = OMatrix::<f64,Dyn,Dyn>::zeros(num_dofs,num_dofs);
-    for values in stiffness.triplet_iter() {
-        dense_stiffness[(values.0,values.1)] = *values.2;
-    }
-    println!("{:3.3}",dense_stiffness)
-    */
+    write_vkt_from_mesh(name,&m, correct_rhs, stress_solution);
 }
 
 fn write_vkt_from_mesh(
-    mesh: FEMesh<2>,
+    file: &str,
+    mesh: &FEMesh<2>,
     solution: OMatrix<f64, Dyn, Const<1>>,
     stress_solution: OMatrix<f64, Dyn, Const<1>>,
 ) {
@@ -1056,7 +1057,7 @@ fn write_vkt_from_mesh(
         .into(),
     };
 
-    let mut f = File::create("test.vtu").unwrap();
+    let mut f = File::create(format!("{}.vtu",file)).unwrap();
 
     vt.write_xml(&mut f).unwrap();
 }
