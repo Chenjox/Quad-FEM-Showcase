@@ -13,8 +13,7 @@ use crate::mesh::{
 };
 use mshio::ElementType;
 use nalgebra::{
-    coordinates, Const, Dim, Dyn, Matrix, MatrixView2x1, OMatrix, OVector, SMatrix, SVector,
-    Storage,
+    coordinates, Const, Dim, Dyn, Matrix, MatrixView2x1, OMatrix, OVector, Rotation2, SMatrix, SVector, Storage
 };
 use nalgebra_sparse::{coo, factorization::CscCholesky, SparseEntryMut::NonZero};
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
@@ -603,11 +602,40 @@ struct YValueDirichlet {
 struct XValueDirichlet {
     x_value: f64
 }
+
+struct YValueRotationDirichlet {
+    rot: f64
+}
+
 struct ConditionRule {
     coordinate_criterion: SVector<f64, 2>,
     dirichlet_value: SVector<f64, 2>,
     active_direction: SVector<bool, 2>,
     smaller_than: bool,
+}
+
+impl DirichletBoundary for YValueRotationDirichlet {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
+        true
+    }
+
+    fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
+        //if coords[1] < 1e-10 && dof_num == 1 {
+        //    // bei x==0 soll y festgehalten werden
+        //    return coords[0] * self.rot;
+        //}
+        //if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 0 {
+        //    return 0.0;
+        //}
+        //0.0
+        let normal_vec = SVector::<f64,2>::new(coords[1],-coords[0]);
+        let rotation = Rotation2::new(self.rot);
+        (coords - rotation * coords)[dof_num]
+    }
 }
 
 impl DirichletBoundary for YValueDirichlet {
@@ -632,7 +660,7 @@ impl DirichletBoundary for YValueDirichlet {
     }
 
     fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
-        if coords[0] < 1e-10 && dof_num == 1 {
+        if coords[1] < 1e-10 && dof_num == 1 {
             // bei x==0 soll y festgehalten werden
             return self.y_value;
         }
@@ -651,13 +679,13 @@ impl DirichletBoundary for XValueDirichlet {
     fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
         //println!("{},{}",node,coords);
         if coords[0] < 1e-10 && dof_num == 0 {
-            // bei y==0 soll x festgehalten werden
-            println!("Constraining Node {} in Direction {}", node, dof_num);
+            // bei x==0 soll x festgehalten werden
+            //println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
         if coords[0] < 1e-10 && coords[1] < 1e-10 && dof_num == 1 {
             // bei x== 0 und y== 0 soll y auch festgehalten werden
-            println!("Constraining Node {} in Direction {}", node, dof_num);
+            //println!("Constraining Node {} in Direction {}", node, dof_num);
             return true;
         }
 
@@ -698,7 +726,7 @@ where
                 if dirichlet.is_constrained(node_index, j, coords) {
                     is_constrained_slice[j] = true;
                     is_value_slice[j] =
-                        dirichlet.get_constrained_value(node_index, num_dof_per_node, coords);
+                        dirichlet.get_constrained_value(node_index, j, coords);
                     //if coords[0] < 1e-10 {
                     //    marked_dofs.insert(node_index, ([true, true], [1., 0.]));
                     //} else {
@@ -724,6 +752,8 @@ where
     }
 
     let dirichlet_vector = dirichlet_vector;
+
+    println!("{:3.3}",dirichlet_vector.transpose());
 
     return (num_constrained, constraint_marker, dirichlet_vector);
 }
@@ -820,7 +850,12 @@ fn dirichlet_backsubstitution<D: DirichletBoundary + Sized>(
 
 fn main() {
     
-    run_patch_test_for_file(&"test", 10.0, 0.2)
+    run_patch_test_for_file(&"patchA", 10.0, 0.2);
+    run_patch_test_for_file(&"patchB", 10.0, 0.2);
+    run_patch_test_for_file(&"patchC", 10.0, 0.2);
+    run_patch_test_for_file(&"patchD", 10.0, 0.2);
+    run_patch_test_for_file(&"patchE", 10.0, 0.2);
+    run_patch_test_for_file(&"patchF", 10.0, 0.2);
 }
 
 fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
@@ -854,9 +889,19 @@ fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
     let traction = ConstantTractionForces {
         map: HashMap::new(),
     };
+    
 
     let dirichlet = vec![YValueDirichlet { y_value: 1.0}];
     patch_test_run(&format!("{}-Y-Disp",file_name), &m, youngs, poisson, &dirichlet, traction);
+
+    // Rotation test
+    let traction = ConstantTractionForces {
+        map: HashMap::new(),
+    };
+    println!("Rotationspatch");
+    let dirichlet = vec![YValueRotationDirichlet { rot: 0.196349540849 }]; // pi/16 ~ noch in der kleinwinkelnäherung
+    patch_test_run(&format!("{}-XY-Rot",file_name), &m, youngs, poisson, &dirichlet, traction);
+
 }
 
 fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &str, mesh: &FEMesh<2>, youngs: f64, poisson: f64, dirichlet: &Vec<D>, neumann: N){
@@ -882,16 +927,16 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
 
     //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
 
-    println!("Setting up Stiffness Matrix");
+    //println!("Setting up Stiffness Matrix");
     let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
 
-    println!("Assembling Neumann Terms for RHS");
+    //println!("Assembling Neumann Terms for RHS");
     assemble_rhs_vector(&m, &traction, &mut rhs);
 
-    println!("{}", rhs);
+    //println!("{}", rhs);
     // Dirichlet
 
-    println!("Incorporating Dirichlet Terms");
+    //println!("Incorporating Dirichlet Terms");
     let (reduced_stiffness, reduced_rhs) =
         incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
 
@@ -901,7 +946,7 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
         dense_stiffness[(values.0, values.1)] = *values.2;
     }
 
-    println!("Solving System");
+    //println!("Solving System");
 
     let reduced_stiffness = reduced_stiffness.transpose_as_csc();
 
@@ -915,7 +960,7 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
         k[i] = sol_k[i]
     }
 
-    println!("{}",k);
+    //println!("{}",k);
 
     // jetzt die Rückwärtsrolle
     let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
@@ -929,7 +974,7 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
         num_dofs_per_node: 2,
     };
 
-    println!("Smothing Stresses");
+    //println!("Smothing Stresses");
 
     let mut stress_rhs =
         OVector::<f64, Dyn>::zeros(stress_smoother.num_dof_per_node() * m.num_nodes());
@@ -955,8 +1000,8 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
         dense_stressness[(values.0, values.1)] = *values.2;
     }
 
-    println!("{:3.3}", dense_stressness);
-    println!("{:3.3}", stress_rhs);
+    //println!("{:3.3}", dense_stressness);
+    //println!("{:3.3}", stress_rhs);
 
     let chol_stress = dense_stressness.cholesky().unwrap();
 
@@ -968,8 +1013,8 @@ fn patch_test_run<D: DirichletBoundary + Sized, N: NeumannBoundaryTerm>(name: &s
         for j in 0..solution.nrows() {
             stress_solution[j * 3 + i] = solution[j]
         }
-        println!("{}", solution);
-        println!("{}", stress_solution);
+        //println!("{}", solution);
+        //println!("{}", stress_solution);
     }
 
     write_vkt_from_mesh(name,&m, correct_rhs, stress_solution);
@@ -1013,7 +1058,7 @@ fn write_vkt_from_mesh(
         stress_vector.push(result[0]);
     }
 
-    println!("{:?}", result_vector);
+    //println!("{:?}", result_vector);
 
     let sols = vec![
         Attribute::DataArray(DataArray {
