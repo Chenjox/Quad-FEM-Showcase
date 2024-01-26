@@ -33,27 +33,39 @@ Line(11) = {7,8};
 Line(12) = {8,5};
 
 // unteres Element
-Curve Loop(100) = {1,2,3,4};
+Curve Loop(100) = {1,6,-9,-5};
+Curve Loop(101) = {2,7,-10,-6};
+Curve Loop(102) = {3,8,-11,-7};
+Curve Loop(103) = {4,5,-12,-8};
 
 // Element der Mitte
-Curve Loop(105) = {9,10,11,12};
+Curve Loop(104) = {9,10,11,12};
 
 Surface(100) = {100};
+Surface(101) = {101};
+Surface(102) = {102};
+Surface(103) = {103};
+Surface(104) = {104};
 
 Physical Curve("Left",4)   = {4};
 Physical Curve("Right",2)  = {2};
 Physical Curve("Bottom",1) = {1};
 Physical Curve("Top",3)    = {3};
 
-Physical Surface("Domain",1) = {100};
+Physical Surface("Domain",1) = {100,101,102,103,104};
+
 
 // // Viele Linien, und vorallem Knoten
-Transfinite Line {1,2,3,4}  = 2 Using Progression 1;
+Transfinite Line {1,6,-9,-5}  = 2 Using Progression 1;
+Transfinite Line {2,7,-10,-6}  = 2 Using Progression 1;
+Transfinite Line {3,8,-11,-7}  = 2 Using Progression 1;
+Transfinite Line {4,5,-12,-8}  = 2 Using Progression 1;
+Transfinite Line {9,10,11,12}  = 2 Using Progression 1;
 
 
 Coherence;
 // SetOrder 1;
-Recombine Surface {100};
+Recombine Surface {100,101,102,103,104};
 Mesh 2;
 RenumberMeshNodes;
 Save "patchC.msh4";

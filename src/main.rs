@@ -837,7 +837,6 @@ fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
     let dirichlet = vec![YValueDirichlet { y_value: 0.0}];
 
     patch_test_run(&format!("{}-Y-Loading",file_name), &m, youngs, poisson, &dirichlet, traction);
-
     let traction = ConstantTractionForces {
         map: HashMap::from([(2, [1., 0.])]),
     };
@@ -845,7 +844,6 @@ fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
     let dirichlet = vec![XValueDirichlet { x_value: 0.0}];
 
     patch_test_run(&format!("{}-X-Loading",file_name), &m, youngs, poisson, &dirichlet, traction);
-
     let traction = ConstantTractionForces {
         map: HashMap::new(),
     };
@@ -853,13 +851,11 @@ fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
     let dirichlet = vec![XValueDirichlet { x_value: 1.0}];
 
     patch_test_run(&format!("{}-X-Disp",file_name), &m, youngs, poisson, &dirichlet, traction);
-
     let traction = ConstantTractionForces {
         map: HashMap::new(),
     };
 
     let dirichlet = vec![YValueDirichlet { y_value: 1.0}];
-
     patch_test_run(&format!("{}-Y-Disp",file_name), &m, youngs, poisson, &dirichlet, traction);
 }
 
