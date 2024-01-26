@@ -2,6 +2,8 @@
 
 width = 1;
 height = 1;
+patchoffset = (width/2)*0.8;
+patchheightset = (height/2)*0.2;
 
 // Zuerst die Punkte
 Point(1) = {0,0,0};
@@ -9,9 +11,9 @@ Point(2) = {width,0,0};
 Point(3) = {width,height,0};
 Point(4) = {0,height,0};
 Point(5) = {width/2,0,0};
-Point(6) = {width,height/2,0};
+Point(6) = {width,height/2-patchheightset,0};
 Point(7) = {width/2,height,0};
-Point(8) = {0,height/2,0};
+Point(8) = {0,height/2-patchheightset,0};
 Point(9) = {width/2,height/2,0};
 
 
@@ -59,4 +61,4 @@ Coherence;
 Recombine Surface {100,101,102,103};
 Mesh 2;
 RenumberMeshNodes;
-Save "patchA.msh4";
+Save "patchF.msh4";
