@@ -402,11 +402,18 @@ fn dirichlet_backsubstitution(
 
 fn main() {
     
-    run_mixed_form(&"CooksMembrane-006", 2.1, 0.49);
-    run_mixed_form(&"CooksMembrane-012", 2.1, 0.49);
-    run_mixed_form(&"CooksMembrane-024", 2.1, 0.49);
-    run_mixed_form(&"CooksMembrane-048", 2.1, 0.49);
-    //run_mixed_form(&"CooksMembrane-096", 2.1, 0.49);
+    //run_mixed_form(&"CooksMembrane-006", 1.0, 0.33);
+    //run_mixed_form(&"CooksMembrane-012", 1.0, 0.33);
+    //run_mixed_form(&"CooksMembrane-024", 1.0, 0.33);
+    //run_mixed_form(&"CooksMembrane-048", 1.0, 0.33);
+    //run_mixed_form(&"CooksMembrane-096", 1.0, 0.33);
+
+
+    run_primal_form(&"CooksMembrane-006", 1.0, 0.33);
+    run_primal_form(&"CooksMembrane-012", 1.0, 0.33);
+    run_primal_form(&"CooksMembrane-024", 1.0, 0.33);
+    run_primal_form(&"CooksMembrane-048", 1.0, 0.33);
+    run_primal_form(&"CooksMembrane-096", 1.0, 0.33);
 }
 
 fn patch_tests() {
@@ -488,9 +495,85 @@ fn run_mixed_form(file_name: &str, youngs: f64, poisson: f64) {
     // jetzt die Rückwärtsrolle
     let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
 
-    println!("{}",&m.get_nodal_coordinates(&[1]));
+    //println!("{}",&m.get_nodal_coordinates(&[1]));
+    println!("{}",correct_rhs.rows(1*2, 2)[1]);
 
-    write_vkt_from_mesh_disp(file_name, &m, correct_rhs);
+    write_vkt_from_mesh_disp(&format!("{}-mixed",file_name), &m, correct_rhs);
+}
+
+fn run_primal_form(file_name: &str, youngs: f64, poisson: f64) {
+    println!("Running {}", file_name);
+    let m = FEMesh::<DIM>::read_from_gmsh(
+        &format!("{}.msh4", file_name),
+        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
+        vec![Box::new(Quad4Element {})],
+    )
+    .unwrap();
+
+    let elast_form = WeakFormAssembler {
+        weak_form: Elasticity {
+            youngs_modulus: youngs,
+            poissons_ratio: poisson,
+        }
+    };
+
+    let traction =  ConstantTractionForces {
+        map: HashMap::from([(2, [0., -1./16.])]),
+    };
+
+    let dirichlet: Vec<Box<dyn DirichletBoundary>> = vec![
+        Box::new(XValueClamped { x_coord: 0.0 })
+    ];
+
+    let num_dof_per_node = elast_form.num_dof_per_node();
+    let num_nodes = m.num_nodes();
+    let num_dofs = num_dof_per_node * m.num_nodes();
+
+    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
+
+    //println!("Setting up Stiffness Matrix");
+    let stiffness = assemble_stiffness_matrix(&m, &elast_form, &mut rhs);
+
+    //println!("Assembling Neumann Terms for RHS");
+    assemble_rhs_vector(&m, &traction, &mut rhs);
+
+    //println!("{}", rhs);
+    // Dirichlet
+
+    //println!("Incorporating Dirichlet Terms");
+    let (reduced_stiffness, reduced_rhs) =
+        incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
+
+    let num_free_dofs = reduced_stiffness.ncols();
+    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_free_dofs, num_free_dofs);
+    for values in reduced_stiffness.triplet_iter() {
+        dense_stiffness[(values.0, values.1)] = *values.2;
+    }
+
+    //println!("Solving System");
+
+    let reduced_stiffness = reduced_stiffness.transpose_as_csc();
+
+    let choles = CscCholesky::factor(&reduced_stiffness).unwrap();
+
+    let sol_k = choles.solve(&reduced_rhs);
+
+    let mut k = OMatrix::<f64, Dyn, Const<1>>::zeros(sol_k.nrows());
+    for i in 0..sol_k.nrows() {
+        k[i] = sol_k[i]
+    }
+
+    //println!("{}",k);
+
+    // jetzt die Rückwärtsrolle
+    let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
+
+    //println!("{}",&m.get_nodal_coordinates(&[1]));
+    println!("{}",correct_rhs.rows(1*2, 2)[1]);
+
+    write_vkt_from_mesh_disp(&format!("{}-priml",file_name), &m, correct_rhs);
 }
 
 fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {

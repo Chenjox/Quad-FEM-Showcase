@@ -252,7 +252,7 @@ impl WeakForm for Elasticity {
         };
 
         let result = b_mat_i.transpose() * self.material_matrix() * b_mat_j;
-        //println!("{}",result);
+        //println!("{},{},{}",virt_node,real_node,result);
 
         let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);
         for i in 0..(2 * 2) {

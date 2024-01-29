@@ -97,6 +97,7 @@ impl<W: WeakForm> LocalStiffnessAssembler for WeakFormAssembler<W> {
                 }
             }
         }
+        println!("{:3.3}",local_stiffness_matrix);
     }
 }
 
