@@ -31,6 +31,21 @@ pub fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
 
             m
         }
+        3 => {
+            let mut m = OMatrix::<f64, Const<3>, Dyn>::zeros(9);
+            let weights_1D = [5.0/9.0,8.0/9.0,5.0/9.0];
+            let pos_1D = [(3. / 5.0_f64).sqrt(), 0.0, -(3. / 5.0_f64).sqrt()];
+            for k in 0..9 {
+                let i_k = k % 3;
+                let j_k = k / 3;
+
+                m[(0,k)] = pos_1D[i_k];
+                m[(1,k)] = pos_1D[j_k];
+                m[(2,k)] = weights_1D[i_k] * weights_1D[j_k];
+            }
+            
+            m
+        }
         _ => {
             panic!()
         }

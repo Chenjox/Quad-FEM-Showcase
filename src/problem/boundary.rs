@@ -33,7 +33,7 @@ impl<W: WeakForm> LocalStiffnessAssembler for WeakFormAssembler<W> {
         local_rhs_vector: &mut OVector<f64,Dyn>,
     ){
         let num_dof_per_node = self.num_dof_per_node();
-        let gauss = get_gauss_rule(2);
+        let gauss = get_gauss_rule(3);
 
         for gauss_point in gauss.column_iter() {
             let xi_1 = gauss_point[0];
