@@ -3,7 +3,6 @@ use nalgebra::{Const, Dyn, OMatrix, OVector, Rotation2, SMatrix, SVector};
 use crate::problem::boundary::{DirichletBoundary, WeakForm};
 
 
-
 pub struct Elasticity {
     pub youngs_modulus: f64,
     pub poissons_ratio: f64,

@@ -21,7 +21,7 @@ use nalgebra::{
 };
 use nalgebra_sparse::{coo, factorization::CscCholesky, SparseEntryMut::NonZero};
 use nalgebra_sparse::{CooMatrix, CsrMatrix};
-use problem::boundary::{DirichletBoundary, WeakForm};
+use problem::{boundary::{DirichletBoundary, LocalStiffnessAssembler, WeakForm, WeakFormAssembler}, integration::get_1d_gauss_rule};
 use vtkio::{
     model::{
         Attribute, Attributes, CellType, Cells, DataArray, DataSet, MetaData,
@@ -44,64 +44,7 @@ use vtkio::{
 
 // Visualisierung
 
-fn get_gauss_rule(order: usize) -> OMatrix<f64, Const<3>, Dyn> {
-    match order {
-        1 => {
-            let mut m = OMatrix::<f64, Const<3>, Dyn>::zeros(1);
-            m[(0, 0)] = 0.;
-            m[(1, 0)] = 0.;
-            m[(2, 0)] = 2.;
-            m
-        }
-        2 => {
-            let mut m = OMatrix::<f64, Const<3>, Dyn>::zeros(4);
-            m[(0, 0)] = (1. / 3.0_f64).sqrt();
-            m[(1, 0)] = (1. / 3.0_f64).sqrt();
-            m[(2, 0)] = 1.;
 
-            m[(0, 1)] = -(1. / 3.0_f64).sqrt();
-            m[(1, 1)] = (1. / 3.0_f64).sqrt();
-            m[(2, 1)] = 1.;
-
-            m[(0, 2)] = (1. / 3.0_f64).sqrt();
-            m[(1, 2)] = -(1. / 3.0_f64).sqrt();
-            m[(2, 2)] = 1.;
-
-            m[(0, 3)] = -(1. / 3.0_f64).sqrt();
-            m[(1, 3)] = -(1. / 3.0_f64).sqrt();
-            m[(2, 3)] = 1.;
-
-            m
-        }
-        _ => {
-            panic!()
-        }
-    }
-}
-
-fn get_1d_gauss_rule(order: usize) -> OMatrix<f64, Const<2>, Dyn> {
-    match order {
-        1 => {
-            let mut m = OMatrix::<f64, Const<2>, Dyn>::zeros(1);
-            m[(0, 0)] = 0.;
-            m[(1, 0)] = 2.;
-            m
-        }
-        2 => {
-            let mut m = OMatrix::<f64, Const<2>, Dyn>::zeros(2);
-            m[(0, 0)] = (1. / 3.0_f64).sqrt();
-            m[(1, 0)] = 1.;
-
-            m[(0, 1)] = -(1. / 3.0_f64).sqrt();
-            m[(1, 1)] = 1.;
-
-            m
-        }
-        _ => {
-            panic!()
-        }
-    }
-}
 
 const DIM: usize = 2;
 
@@ -139,15 +82,15 @@ fn compute_sparsity_pattern<const DIM: usize>(
 // Diese gibt eine Dimension des Meshs vor, noch nicht implementiert.
 
 
-fn assemble_stiffness_matrix<W>(
+fn assemble_stiffness_matrix<A>(
     mesh: &FEMesh<2>,
-    weakform: &W,
+    assembler: &A,
     rhs: &mut OVector<f64, Dyn>,
 ) -> CsrMatrix<f64>
 where
-    W: WeakForm,
+    A: LocalStiffnessAssembler,
 {
-    let num_dof_per_node = weakform.num_dof_per_node();
+    let num_dof_per_node = assembler.num_dof_per_node();
 
     let mut stiffness = compute_sparsity_pattern(&mesh, num_dof_per_node);
 
@@ -162,82 +105,24 @@ where
         let current_element_index = element.2;
         let ref_element = &mesh.ref_elements[element.0];
         let num_element_nodes = element.1.nrows();
-        let gauss = get_gauss_rule(2);
+        let element_nodes = element.1.as_slice();
         let nodal_coordinates = mesh.get_nodal_coordinates(element.1.as_slice());
-
+        
         // Lokale Steifigkeitsmatrix
         let mut k = OMatrix::<f64, Dyn, Dyn>::zeros(
             num_dof_per_node * num_element_nodes,
             num_dof_per_node * num_element_nodes,
         );
-
+        
         let mut rhs_local = OVector::<f64, Dyn>::zeros(num_dof_per_node * num_element_nodes);
-
-        for gauss_point in gauss.column_iter() {
-            let xi_1 = gauss_point[0];
-            let xi_2 = gauss_point[1];
-            let weight = gauss_point[2];
-
-            let ref_coordinates = SVector::<f64, 2>::new(xi_1, xi_2);
-
-            //let normal_func = ref_element.get_shape_functions(ref_coordinates);
-
-            //println!("{}",normal_func);
-
-            let shape_functions = ref_element.get_shape_functions(ref_coordinates);
-            let derivatives = ref_element.get_shape_function_derivatives(ref_coordinates);
-            let jacobian =
-                ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coordinates);
-            let inv_jacobian = jacobian.try_inverse().unwrap();
-            let determinant =
-                jacobian[(0, 0)] * jacobian[(1, 1)] - jacobian[(0, 1)] * jacobian[(1, 0)];
-
-            //println!("{}",jacobian);
-
-            // Transformation auf tatsächliche Elemente
-            let derivatives = derivatives * inv_jacobian;
-
-            for j in element.1.row_iter().enumerate() {
-                let virt_node_number = j.0;
-                for i in element.1.row_iter().enumerate() {
-                    let real_node_number = i.0;
-
-                    let result = weight
-                        * weakform.stiffness_term(
-                            virt_node_number,
-                            real_node_number,
-                            element.1.as_slice(),
-                            &shape_functions,
-                            &derivatives,
-                        )
-                        * determinant;
-                    // Offset
-                    for i in 0..(num_dof_per_node * num_dof_per_node) {
-                        let i_k = i % num_dof_per_node;
-                        let j_k = i / num_dof_per_node;
-
-                        k[(
-                            real_node_number * num_dof_per_node + i_k,
-                            virt_node_number * num_dof_per_node + j_k,
-                        )] += result[(i_k, j_k)];
-                    }
-                }
-
-                let rhs_term = weakform.right_hand_side_body(
-                    virt_node_number,
-                    &element.1.as_slice(),
-                    &shape_functions,
-                    &derivatives,
-                );
-                for i in 0..num_dof_per_node {
-                    rhs_local[virt_node_number * num_dof_per_node + i] +=
-                        weight * rhs_term[i] * determinant;
-                }
-            }
-        }
-        // Rechte Seite Vektor:
-
-        // Wenn das Element tatsächlich einen Rand besitzt
+        
+        // Ab hier wird der LocalStiffnessAssembler eingeführt
+        assembler.assemble_local_stiffness_term(
+            &ref_element, 
+            element_nodes, 
+            &nodal_coordinates, 
+            &mut k, 
+            &mut rhs_local);
 
         // Einbauen in die Stiffness Matrix
         for node_i in 0..element.1.nrows() {
@@ -635,12 +520,16 @@ fn patch_test_run<N: NeumannBoundaryTerm>(
         poissons_ratio: poisson,
     };
 
+    let elast_form = WeakFormAssembler {
+        weak_form: elast
+    };
+
     // Am Rand 3
     let traction = neumann;
 
     let dirichlet = dirichlet;
 
-    let num_dof_per_node = elast.num_dof_per_node();
+    let num_dof_per_node = elast_form.num_dof_per_node();
     let num_nodes = m.num_nodes();
     let num_dofs = num_dof_per_node * m.num_nodes();
 
@@ -649,7 +538,7 @@ fn patch_test_run<N: NeumannBoundaryTerm>(
     //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
 
     //println!("Setting up Stiffness Matrix");
-    let stiffness = assemble_stiffness_matrix(&m, &elast, &mut rhs);
+    let stiffness = assemble_stiffness_matrix(&m, &elast_form, &mut rhs);
 
     //println!("Assembling Neumann Terms for RHS");
     assemble_rhs_vector(&m, &traction, &mut rhs);
@@ -694,12 +583,16 @@ fn patch_test_run<N: NeumannBoundaryTerm>(
         num_dofs_per_node: 2,
     };
 
+    let stress_smoother_form = WeakFormAssembler {
+        weak_form: stress_smoother
+    };
+
     //println!("Smothing Stresses");
 
     let mut stress_rhs =
-        OVector::<f64, Dyn>::zeros(stress_smoother.num_dof_per_node() * m.num_nodes());
+        OVector::<f64, Dyn>::zeros(stress_smoother_form.num_dof_per_node() * m.num_nodes());
 
-    let _stressness = assemble_stiffness_matrix(&m, &stress_smoother, &mut stress_rhs);
+    let _stressness = assemble_stiffness_matrix(&m, &stress_smoother_form, &mut stress_rhs);
 
     let stress_smoother_stiffness = StressSmootherStiffness {
         youngs_modulus: youngs,
@@ -709,10 +602,14 @@ fn patch_test_run<N: NeumannBoundaryTerm>(
         num_dofs_per_node: 2,
     };
 
+    let stress_stiff_smoother_form = WeakFormAssembler {
+        weak_form: stress_smoother_stiffness
+    };
+
     let mut dummy_stress_rhs = OVector::<f64, Dyn>::zeros(m.num_nodes());
 
     let stressness =
-        assemble_stiffness_matrix(&m, &stress_smoother_stiffness, &mut dummy_stress_rhs);
+        assemble_stiffness_matrix(&m, &stress_stiff_smoother_form, &mut dummy_stress_rhs);
 
     let mut dense_stressness =
         OMatrix::<f64, Dyn, Dyn>::zeros(stressness.nrows(), stressness.ncols());
