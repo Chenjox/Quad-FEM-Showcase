@@ -420,6 +420,24 @@ pub struct YValueRotationDirichlet {
     pub rot: f64,
 }
 
+pub struct XValueClamped {
+    pub x_coord: f64
+}
+
+impl DirichletBoundary for XValueClamped {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+
+    fn is_constrained(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> bool {
+        (coords[0] - self.x_coord).abs() < 1e-10 
+    }
+
+    fn get_constrained_value(&self, node: usize, dof_num: usize, coords: SVector<f64, 2>) -> f64 {
+        0.0
+    }
+}
 
 impl DirichletBoundary for YValueRotationDirichlet {
     fn num_dof_per_node(&self) -> usize {

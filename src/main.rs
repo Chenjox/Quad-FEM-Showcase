@@ -9,7 +9,7 @@ pub mod elasticity;
 use core::num;
 use std::{collections::HashMap, fs::File, io::Write, path::PathBuf};
 
-use crate::{elasticity::{XValueCoordinateDirichlet, XValueDirichlet, YValueDirichlet, YValueRotationDirichlet}, mesh::{
+use crate::{elasticity::{ElasticityMixed, XValueClamped, XValueCoordinateDirichlet, XValueDirichlet, YValueDirichlet, YValueRotationDirichlet}, mesh::{
     elements::{Quad4Element, ReferenceElement},
     femesh::FEMesh,
 }};
@@ -302,10 +302,10 @@ fn get_dirichlet_vector_and_map(
             }
         }
     }
-    println!("{}",dirichlet_marker.transpose());
+    //println!("{}",dirichlet_marker.transpose());
     let dirichlet_vector = dirichlet_vector;
 
-    println!("{:3.3}", dirichlet_vector.transpose());
+    //println!("{:3.3}", dirichlet_vector.transpose());
 
     return (num_constrained, constraint_marker, dirichlet_vector);
 }
@@ -401,6 +401,15 @@ fn dirichlet_backsubstitution(
 }
 
 fn main() {
+    
+    run_mixed_form(&"CooksMembrane-006", 2.1, 0.49);
+    run_mixed_form(&"CooksMembrane-012", 2.1, 0.49);
+    run_mixed_form(&"CooksMembrane-024", 2.1, 0.49);
+    run_mixed_form(&"CooksMembrane-048", 2.1, 0.49);
+    //run_mixed_form(&"CooksMembrane-096", 2.1, 0.49);
+}
+
+fn patch_tests() {
     let emodulus = 2.1; //e5;
     let poisson = 0.2;
 
@@ -413,7 +422,75 @@ fn main() {
 }
 
 fn run_mixed_form(file_name: &str, youngs: f64, poisson: f64) {
-    
+    println!("Running {}", file_name);
+    let m = FEMesh::<DIM>::read_from_gmsh(
+        &format!("{}.msh4", file_name),
+        HashMap::from([(ElementType::Qua4, 0), (ElementType::Lin2, 1)]),
+        vec![Box::new(Quad4Element {})],
+    )
+    .unwrap();
+
+    let elast_form = ElasticityMixed {
+        youngs_modulus: youngs,
+        poissons_ratio: poisson,
+    };
+
+    let traction =  ConstantTractionForces {
+        map: HashMap::from([(2, [0., -1./16.])]),
+    };
+
+    let dirichlet: Vec<Box<dyn DirichletBoundary>> = vec![
+        Box::new(XValueClamped { x_coord: 0.0 })
+    ];
+
+    let num_dof_per_node = elast_form.num_dof_per_node();
+    let num_nodes = m.num_nodes();
+    let num_dofs = num_dof_per_node * m.num_nodes();
+
+    let mut rhs = OVector::<f64, Dyn>::zeros(num_dofs);
+
+    //let mut stiffness = compute_sparsity_pattern(&m, num_dof_per_node);
+
+    //println!("Setting up Stiffness Matrix");
+    let stiffness = assemble_stiffness_matrix(&m, &elast_form, &mut rhs);
+
+    //println!("Assembling Neumann Terms for RHS");
+    assemble_rhs_vector(&m, &traction, &mut rhs);
+
+    //println!("{}", rhs);
+    // Dirichlet
+
+    //println!("Incorporating Dirichlet Terms");
+    let (reduced_stiffness, reduced_rhs) =
+        incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
+
+    let num_free_dofs = reduced_stiffness.ncols();
+    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_free_dofs, num_free_dofs);
+    for values in reduced_stiffness.triplet_iter() {
+        dense_stiffness[(values.0, values.1)] = *values.2;
+    }
+
+    //println!("Solving System");
+
+    let reduced_stiffness = reduced_stiffness.transpose_as_csc();
+
+    let choles = CscCholesky::factor(&reduced_stiffness).unwrap();
+
+    let sol_k = choles.solve(&reduced_rhs);
+
+    let mut k = OMatrix::<f64, Dyn, Const<1>>::zeros(sol_k.nrows());
+    for i in 0..sol_k.nrows() {
+        k[i] = sol_k[i]
+    }
+
+    //println!("{}",k);
+
+    // jetzt die Rückwärtsrolle
+    let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
+
+    println!("{}",&m.get_nodal_coordinates(&[1]));
+
+    write_vkt_from_mesh_disp(file_name, &m, correct_rhs);
 }
 
 fn run_patch_test_for_file(file_name: &str, youngs: f64, poisson: f64) {
@@ -692,6 +769,79 @@ fn write_vkt_from_mesh(
             elem: vtkio::model::ElementType::Generic(3),
             data: vtkio::IOBuffer::F64(stress_vector),
         }),
+    ];
+
+    let vt = Vtk {
+        version: Version::new((0, 1)),
+        title: String::from("Displacements"),
+        file_path: Some(path),
+        byte_order: vtkio::model::ByteOrder::LittleEndian,
+        data: DataSet::inline(UnstructuredGridPiece {
+            points: points_vec.into(),
+            cells: Cells {
+                cell_verts: VertexNumbers::XML {
+                    offsets: offset_vec,
+                    connectivity: connectivity_vec,
+                },
+                types: vec![vec![CellType::Quad; num_elems]]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<CellType>>(),
+            },
+            data: Attributes {
+                point: sols,
+                cell: vec![],
+            },
+        })
+        .into(),
+    };
+
+    let mut f = File::create(format!("{}.vtu", file)).unwrap();
+
+    vt.write_xml(&mut f).unwrap();
+}
+
+fn write_vkt_from_mesh_disp(
+    file: &str,
+    mesh: &FEMesh<2>,
+    solution: OMatrix<f64, Dyn, Const<1>>
+) {
+    let path = PathBuf::from(r"\test\test.vtu");
+
+    let mut points_vec = Vec::new();
+    for point in mesh.coordinates.column_iter() {
+        points_vec.push(point[0]);
+        points_vec.push(point[1]);
+        points_vec.push(0.0);
+    }
+
+    let num_elems = mesh.elements.ncols();
+    let mut connectivity_vec = Vec::new();
+    let mut offset_vec = Vec::new();
+
+    for elems in mesh.elements.column_iter() {
+        for vertex in elems.row_iter() {
+            connectivity_vec.push(vertex[0] as u64);
+        }
+        offset_vec.push(connectivity_vec.len() as u64);
+    }
+
+    let mut result_vector = Vec::new();
+    for (index, result) in solution.row_iter().enumerate() {
+        result_vector.push(result[0]);
+        if index % 2 == 1 {
+            result_vector.push(0.0)
+        }
+    }
+
+    //println!("{:?}", result_vector);
+
+    let sols = vec![
+        Attribute::DataArray(DataArray {
+            name: String::from("Displacement"),
+            elem: vtkio::model::ElementType::Vectors,
+            data: vtkio::IOBuffer::F64(result_vector),
+        })
     ];
 
     let vt = Vtk {
