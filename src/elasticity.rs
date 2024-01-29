@@ -54,7 +54,7 @@ impl ElasticityMixed {
         let b_mat_j = b_mat_j - SMatrix::<f64,3,3>::new(1.,1.,0.,1.,1.,0.,0.,0.,0.) * b_mat_j;
 
 
-        let result = b_mat_i.transpose() * 2.0 * self.get_shear_modulus() * b_mat_j;
+        let result = b_mat_j.transpose() * 2.0 * self.get_shear_modulus() * b_mat_i;
         //println!("{}",result);
 
         let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);

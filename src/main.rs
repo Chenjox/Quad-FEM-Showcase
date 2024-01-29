@@ -402,18 +402,16 @@ fn dirichlet_backsubstitution(
 
 fn main() {
     
-    //run_mixed_form(&"CooksMembrane-006", 1.0, 0.33);
-    //run_mixed_form(&"CooksMembrane-012", 1.0, 0.33);
-    //run_mixed_form(&"CooksMembrane-024", 1.0, 0.33);
-    //run_mixed_form(&"CooksMembrane-048", 1.0, 0.33);
-    //run_mixed_form(&"CooksMembrane-096", 1.0, 0.33);
+    let refinements = [&"006",&"012",&"024",&"048",&"096",&"192"];
 
+    for i in refinements {
+        let filename = &format!("CooksMembrane-{}",i);
+        
+        run_primal_form(&filename, 1.0, 0.33);
+        run_mixed_form(&filename, 1.0, 0.33);
+    }
 
-    run_primal_form(&"CooksMembrane-006", 1.0, 0.33);
-    run_primal_form(&"CooksMembrane-012", 1.0, 0.33);
-    run_primal_form(&"CooksMembrane-024", 1.0, 0.33);
-    run_primal_form(&"CooksMembrane-048", 1.0, 0.33);
-    run_primal_form(&"CooksMembrane-096", 1.0, 0.33);
+    patch_tests();
 }
 
 fn patch_tests() {
@@ -472,10 +470,7 @@ fn run_mixed_form(file_name: &str, youngs: f64, poisson: f64) {
         incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
 
     let num_free_dofs = reduced_stiffness.ncols();
-    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_free_dofs, num_free_dofs);
-    for values in reduced_stiffness.triplet_iter() {
-        dense_stiffness[(values.0, values.1)] = *values.2;
-    }
+    
 
     //println!("Solving System");
 
@@ -496,7 +491,7 @@ fn run_mixed_form(file_name: &str, youngs: f64, poisson: f64) {
     let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
 
     //println!("{}",&m.get_nodal_coordinates(&[1]));
-    println!("{}",correct_rhs.rows(1*2, 2)[1]);
+    println!("{},{}",num_free_dofs,correct_rhs.rows(1*2, 2)[1]);
 
     write_vkt_from_mesh_disp(&format!("{}-mixed",file_name), &m, correct_rhs);
 }
@@ -547,24 +542,19 @@ fn run_primal_form(file_name: &str, youngs: f64, poisson: f64) {
         incorporate_dirichlet_boundary(&m, &stiffness, &rhs, &dirichlet);
 
     let num_free_dofs = reduced_stiffness.ncols();
-    let mut dense_stiffness = OMatrix::<f64, Dyn, Dyn>::zeros(num_free_dofs, num_free_dofs);
-    for values in reduced_stiffness.triplet_iter() {
-        dense_stiffness[(values.0, values.1)] = *values.2;
-    }
 
     //println!("Solving System");
 
-    let lu = dense_stiffness.full_piv_lu();
+    //let lu = dense_stiffness.full_piv_lu();
 
-    let sol_k = lu.solve(&reduced_rhs).unwrap();
-    /* 
+    //let sol_k = lu.solve(&reduced_rhs).unwrap();
+    
     let reduced_stiffness = reduced_stiffness.transpose_as_csc();
 
     let choles = CscCholesky::factor(&reduced_stiffness).unwrap();
 
     let sol_k = choles.solve(&reduced_rhs);
 
-    */
 
     let mut k = OMatrix::<f64, Dyn, Const<1>>::zeros(sol_k.nrows());
     for i in 0..sol_k.nrows() {
@@ -577,7 +567,7 @@ fn run_primal_form(file_name: &str, youngs: f64, poisson: f64) {
     let correct_rhs = dirichlet_backsubstitution(&m, &k, &dirichlet);
 
     //println!("{}",&m.get_nodal_coordinates(&[1]));
-    println!("{}",correct_rhs.rows(1*2, 2)[1]);
+    println!("{},{}",num_free_dofs,correct_rhs.rows(1*2, 2)[1]);
 
     write_vkt_from_mesh_disp(&format!("{}-priml",file_name), &m, correct_rhs);
 }
