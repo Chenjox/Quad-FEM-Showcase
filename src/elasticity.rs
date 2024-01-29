@@ -1,7 +1,201 @@
 use nalgebra::{Const, Dyn, OMatrix, OVector, Rotation2, SMatrix, SVector};
 
-use crate::problem::boundary::{DirichletBoundary, WeakForm};
+use crate::{mesh::elements::ReferenceElement, problem::{boundary::{DirichletBoundary, LocalStiffnessAssembler, WeakForm}, integration::get_gauss_rule}};
 
+
+pub struct ElasticityMixed {
+    pub youngs_modulus: f64,
+    pub poissons_ratio: f64
+}
+
+impl ElasticityMixed {
+
+    fn get_shear_and_compressive(&self) -> (f64,f64) {
+        let compression_modulus = self.youngs_modulus / (3.0 * (1.0 - 2.0 * self.poissons_ratio));
+        let second_lame = self.youngs_modulus / (2.0 * (1.0 + self.poissons_ratio));
+
+        return (second_lame, compression_modulus);
+    }
+
+    fn get_compressive_modulus(&self) -> f64 {
+        self.youngs_modulus / (3.0 * (1.0 - 2.0 * self.poissons_ratio))
+    }
+
+    fn get_shear_modulus(&self) -> f64 {
+        self.youngs_modulus / (2.0 * (1.0 + self.poissons_ratio))
+    }
+
+    fn first_weak_form(&self,
+        virt_node: usize,
+        real_node: usize,
+        _element_nodes: &[usize],
+        _shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+        shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+    ) -> OMatrix<f64, Dyn, Dyn>{
+        let b_mat_i = {
+            let mut result = SMatrix::<f64, 3, 2>::zeros();
+            result[(0, 0)] = shape_derivatives[(virt_node, 0)]; // N1x
+            result[(1, 1)] = shape_derivatives[(virt_node, 1)]; // N1y
+            result[(2, 0)] = shape_derivatives[(virt_node, 1)]; // N1y
+            result[(2, 1)] = shape_derivatives[(virt_node, 0)]; // N1x
+            result
+        };
+
+        let b_mat_i = b_mat_i - SMatrix::<f64,3,3>::new(1.,1.,0.,1.,1.,0.,0.,0.,0.) * b_mat_i;
+
+        let b_mat_j = {
+            let mut result = SMatrix::<f64, 3, 2>::zeros();
+            result[(0, 0)] = shape_derivatives[(real_node, 0)]; // N1x
+            result[(1, 1)] = shape_derivatives[(real_node, 1)]; // N1y
+            result[(2, 0)] = shape_derivatives[(real_node, 1)]; // N1y
+            result[(2, 1)] = shape_derivatives[(real_node, 0)]; // N1x
+            result
+        };
+        let b_mat_j = b_mat_j - SMatrix::<f64,3,3>::new(1.,1.,0.,1.,1.,0.,0.,0.,0.) * b_mat_j;
+
+
+        let result = b_mat_i.transpose() * 2.0 * self.get_shear_modulus() * b_mat_j;
+        //println!("{}",result);
+
+        let mut resulting = OMatrix::<f64, Dyn, Dyn>::zeros(2, 2);
+        for i in 0..(2 * 2) {
+            let i_k = i % 2;
+            let j_k = i / 2;
+
+            resulting[(i_k, j_k)] = result[(i_k, j_k)];
+        }
+        resulting
+    }
+
+    fn second_weak_form(&self,
+    virt_node: usize,
+    real_node: usize,
+    _element_nodes: &[usize],
+    _shape_functions: &OMatrix<f64, Dyn, Const<1>>,
+    shape_derivatives: &OMatrix<f64, Dyn, Const<2>>,
+) -> (OMatrix<f64, Const<2>, Const<1>>,OMatrix<f64, Const<1>, Const<2>>) {
+    let b_mat_i = {
+        let mut result = SMatrix::<f64, 3, 2>::zeros();
+        result[(0, 0)] = shape_derivatives[(virt_node, 0)]; // N1x
+        result[(1, 1)] = shape_derivatives[(virt_node, 1)]; // N1y
+        result[(2, 0)] = shape_derivatives[(virt_node, 1)]; // N1y
+        result[(2, 1)] = shape_derivatives[(virt_node, 0)]; // N1x
+        result
+    };
+    let discrete_div_i = SMatrix::<f64,1,3>::new(1.,1.,0.) * b_mat_i;
+
+    let b_mat_j = {
+        let mut result = SMatrix::<f64, 3, 2>::zeros();
+        result[(0, 0)] = shape_derivatives[(real_node, 0)]; // N1x
+        result[(1, 1)] = shape_derivatives[(real_node, 1)]; // N1y
+        result[(2, 0)] = shape_derivatives[(real_node, 1)]; // N1y
+        result[(2, 1)] = shape_derivatives[(real_node, 0)]; // N1x
+        result
+    };
+    let discrete_div_j = SMatrix::<f64,1,3>::new(1.,1.,0.) * b_mat_j;
+
+    return (discrete_div_j.transpose(), discrete_div_i);
+}
+}
+
+impl LocalStiffnessAssembler for ElasticityMixed {
+    fn num_dof_per_node(&self) -> usize {
+        2
+    }
+
+    fn assemble_local_stiffness_term(&self, 
+        ref_element: &Box<dyn ReferenceElement<2>>, 
+        element_nodes: &[usize],
+        nodal_coordinates: &OMatrix<f64, Const<2>, Dyn>,
+        local_stiffness_matrix: &mut OMatrix<f64,Dyn,Dyn>,
+        local_rhs_vector: &mut OVector<f64,Dyn>,
+    ) {
+        let num_dof_per_node = self.num_dof_per_node();
+        let gauss = get_gauss_rule(2);
+
+        let mut pressure_correction_left = OMatrix::<f64,Dyn,Dyn>::zeros(local_stiffness_matrix.nrows(),1);
+        let mut pressure_correction_right = OMatrix::<f64,Dyn,Dyn>::zeros(1,local_stiffness_matrix.ncols());
+
+        let mut area = 0.;
+        for gauss_point in gauss.column_iter() {
+            let xi_1 = gauss_point[0];
+            let xi_2 = gauss_point[1];
+            let weight = gauss_point[2];
+
+            let ref_coordinates = SVector::<f64, 2>::new(xi_1, xi_2);
+
+            //let normal_func = ref_element.get_shape_functions(ref_coordinates);
+
+            //println!("{}",normal_func);
+
+            let shape_functions = ref_element.get_shape_functions(ref_coordinates);
+            let derivatives = ref_element.get_shape_function_derivatives(ref_coordinates);
+            let jacobian =
+                ref_element.get_jacobian_determinant(&nodal_coordinates, ref_coordinates);
+            let inv_jacobian = jacobian.try_inverse().unwrap();
+            let determinant =
+                jacobian[(0, 0)] * jacobian[(1, 1)] - jacobian[(0, 1)] * jacobian[(1, 0)];
+
+            //println!("{}",jacobian);
+            area += weight * determinant;
+
+            // Transformation auf tatsächliche Elemente
+            let derivatives = derivatives * inv_jacobian;
+
+            for j in element_nodes.iter().enumerate() {
+                let virt_node_number = j.0;
+                for i in element_nodes.iter().enumerate() {
+                    let real_node_number = i.0;
+
+                    let result = weight
+                        * self.first_weak_form(
+                            virt_node_number,
+                            real_node_number,
+                            element_nodes,
+                            &shape_functions,
+                            &derivatives,
+                        )
+                        * determinant;
+
+                    let (pressure_left,pressure_right) = self.second_weak_form(
+                        virt_node_number,
+                        real_node_number,
+                        element_nodes,
+                        &shape_functions,
+                        &derivatives,
+                    );
+                    // Offset
+                    for i in 0..(num_dof_per_node * num_dof_per_node) {
+                        let i_k = i % num_dof_per_node;
+                        let j_k = i / num_dof_per_node;
+
+                        local_stiffness_matrix[(
+                            real_node_number * num_dof_per_node + i_k,
+                            virt_node_number * num_dof_per_node + j_k,
+                        )] += result[(i_k, j_k)];
+
+                        pressure_correction_left[real_node_number * num_dof_per_node + i_k] += weight*pressure_left[i_k]*determinant;
+                        pressure_correction_right[real_node_number * num_dof_per_node + j_k] += weight*pressure_right[j_k]*determinant;
+                    }
+                }
+
+                let rhs_term = SVector::<f64,2>::zeros();
+                for i in 0..num_dof_per_node {
+                    local_rhs_vector[virt_node_number * num_dof_per_node + i] +=
+                        weight * rhs_term[i] * determinant;
+                }
+            }
+        }// Gausspunkt ende
+        let pressure_correction = self.get_compressive_modulus()/area * pressure_correction_left * pressure_correction_right;
+
+
+        for i in 0..local_stiffness_matrix.ncols() {
+            for j in 0..local_stiffness_matrix.nrows() {
+                local_stiffness_matrix[(i,j)] += pressure_correction[(i,j)];
+            }
+        }
+    }
+}
 
 pub struct Elasticity {
     pub youngs_modulus: f64,
