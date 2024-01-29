@@ -554,11 +554,17 @@ fn run_primal_form(file_name: &str, youngs: f64, poisson: f64) {
 
     //println!("Solving System");
 
+    let lu = dense_stiffness.full_piv_lu();
+
+    let sol_k = lu.solve(&reduced_rhs).unwrap();
+    /* 
     let reduced_stiffness = reduced_stiffness.transpose_as_csc();
 
     let choles = CscCholesky::factor(&reduced_stiffness).unwrap();
 
     let sol_k = choles.solve(&reduced_rhs);
+
+    */
 
     let mut k = OMatrix::<f64, Dyn, Const<1>>::zeros(sol_k.nrows());
     for i in 0..sol_k.nrows() {

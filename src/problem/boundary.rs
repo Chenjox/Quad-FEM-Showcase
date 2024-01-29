@@ -74,9 +74,9 @@ impl<W: WeakForm> LocalStiffnessAssembler for WeakFormAssembler<W> {
                         )
                         * determinant;
                     // Offset
-                    for i in 0..(num_dof_per_node * num_dof_per_node) {
-                        let i_k = i % num_dof_per_node;
-                        let j_k = i / num_dof_per_node;
+                    for k in 0..(num_dof_per_node * num_dof_per_node) {
+                        let i_k = k % num_dof_per_node;
+                        let j_k = k / num_dof_per_node;
 
                         local_stiffness_matrix[(
                             real_node_number * num_dof_per_node + i_k,
@@ -97,7 +97,7 @@ impl<W: WeakForm> LocalStiffnessAssembler for WeakFormAssembler<W> {
                 }
             }
         }
-        println!("{:3.3}",local_stiffness_matrix);
+        //println!("{:3.3}",local_stiffness_matrix);
     }
 }
 
